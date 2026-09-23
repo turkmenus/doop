@@ -1622,6 +1622,7 @@ function bridge(handler: (req: globalThis.Request) => Promise<globalThis.Respons
   }
 }
 app.get('/.well-known/oauth-authorization-server', (req, res) => bridge(oAuthDiscoveryMetadata(auth))(req, res))
+app.get('/.well-known/openid-configuration', (req, res) => bridge(oAuthDiscoveryMetadata(auth))(req, res))
 
 /* Protected-resource metadata must name the exact endpoint the CLIENT
    connected to (RFC 9728 §3.3 — strict clients such as Muse reject a `resource`
@@ -1631,6 +1632,8 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => bridge(oAuthDis
    validate, so the origin is echoed from the request. Both well-known paths
    serve the same document, the shape Linear ships. */
 function protectedResourceMetadata(req: express.Request, res: express.Response) {
+  res.header('Access-Control-Allow-Origin', '*')
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   res.json({
     resource: `${req.protocol}://${req.get('host')}/mcp`,
     authorization_servers: [PUBLIC_ORIGIN],

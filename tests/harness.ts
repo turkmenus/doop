@@ -72,7 +72,12 @@ export class Client {
   async req(pathname: string, init: RequestInit = {}): Promise<Response> {
     const res = await fetch(this.server.base + pathname, {
       ...init,
-      headers: { 'Content-Type': 'application/json', Cookie: this.header(), ...init.headers },
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: this.server.base,
+        Cookie: this.header(),
+        ...init.headers,
+      },
       redirect: 'manual',
     })
     for (const c of res.headers.getSetCookie()) {

@@ -1433,14 +1433,15 @@ export function buildMcpServer(owner?: string, ownerId?: string): McpServer {
 
 /** Stateless streamable-HTTP MCP endpoint. */
 export async function handleMcpRequest(req: Request, res: Response) {
-  if (req.method !== 'POST') {
-    res.status(405).json({
-      jsonrpc: '2.0',
-      error: { code: -32000, message: 'Method not allowed. This MCP endpoint is stateless; use POST.' },
-      id: null,
-    })
+  res.header('Access-Control-Allow-Origin', '*')
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key')
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end()
     return
   }
+
   /* OAuth gate: try the OAuth session first. If absent, check for a static
      Personal Access Token (Bearer doop_pat_... or X-API-Key). The 401 +
      WWW-Authenticate header is what triggers browser approval in OAuth clients (RFC 9728). */
@@ -1473,6 +1474,15 @@ export async function handleMcpRequest(req: Request, res: Response) {
         error: { code: -32001, message: 'Unauthorized: this MCP server requires OAuth or a Personal Access Token' },
         id: null,
       })
+    return
+  }
+
+  if (req.method !== 'POST') {
+    res.status(405).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Method not allowed. This MCP endpoint is stateless; use POST.' },
+      id: null,
+    })
     return
   }
   /* banning revokes browser sessions, but an already-issued MCP token keeps
