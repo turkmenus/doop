@@ -1477,10 +1477,10 @@ export async function handleMcpRequest(req: Request, res: Response) {
     return
   }
 
-  if (req.method !== 'POST') {
+  if (req.method !== 'POST' && req.method !== 'GET') {
     res.status(405).json({
       jsonrpc: '2.0',
-      error: { code: -32000, message: 'Method not allowed. This MCP endpoint is stateless; use POST.' },
+      error: { code: -32000, message: 'Method not allowed. Use GET or POST.' },
       id: null,
     })
     return
@@ -1499,7 +1499,7 @@ export async function handleMcpRequest(req: Request, res: Response) {
      grow — instrument it. `initialize` marks a fresh client session (and is
      the only message carrying the client's name); tool calls mark actual use,
      throttled because one design task is dozens of calls. */
-  const msgs = Array.isArray(req.body) ? req.body : [req.body]
+  const msgs = Array.isArray(req.body) ? req.body : req.body ? [req.body] : []
   for (const msg of msgs) {
     if (msg?.method === 'initialize') {
       capture(userId, 'custom_agent_connected', {
