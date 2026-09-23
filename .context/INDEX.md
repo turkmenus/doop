@@ -8,6 +8,7 @@
 - [@RELEASE.md](RELEASE.md) - Docker self-host path and the Tauri desktop DMG release pipeline
   (auto-imported).
 - [@CODESTYLE.md](CODESTYLE.md) - ESLint/Prettier/commitlint crib sheet (auto-imported).
+- [MCP_ARCHITECTURE.md](../MCP_ARCHITECTURE.md) - Model Context Protocol (MCP) server architecture, tool ecosystem, and realtime streaming.
 
 ## Subfolders
 

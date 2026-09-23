@@ -447,6 +447,27 @@ export const api = {
   integrations: () => req<IntegrationsStatus>('/api/integrations'),
   startMetaConnect: () => req<{ url: string }>('/api/integrations/meta/start', { method: 'POST' }),
   disconnectMeta: () => req<IntegrationsStatus>('/api/integrations/meta', { method: 'DELETE' }),
+  /* MCP personal access tokens (API keys) */
+  listMcpKeys: () => req<McpKeyInfo[]>('/api/mcp-keys'),
+  createMcpKey: (name: string, expiresInDays?: number) =>
+    req<CreatedMcpKeyInfo>('/api/mcp-keys', {
+      method: 'POST',
+      body: JSON.stringify({ name, expiresInDays }),
+    }),
+  deleteMcpKey: (id: string) => req<{ ok: boolean }>(`/api/mcp-keys/${id}`, { method: 'DELETE' }),
+}
+
+export interface McpKeyInfo {
+  id: string
+  name: string
+  prefix: string
+  createdAt: number
+  lastUsedAt: number | null
+  expiresAt: number | null
+}
+
+export interface CreatedMcpKeyInfo extends McpKeyInfo {
+  token: string
 }
 
 export interface AdminCanvas extends CanvasMeta {

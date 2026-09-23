@@ -568,3 +568,19 @@ export const localAgentPreferences = pgTable('local_agent_preferences', {
   enabled: boolean('enabled').notNull().default(false),
   model: text('model').notNull().default('default'),
 })
+
+/** Personal Access Tokens / API Keys for authenticating MCP clients without OAuth. */
+export const mcpApiKeys = pgTable(
+  'mcp_api_keys',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').notNull(),
+    name: text('name').notNull(),
+    keyHash: text('key_hash').notNull().unique(),
+    prefix: text('prefix').notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    lastUsedAt: bigint('last_used_at', { mode: 'number' }),
+    expiresAt: bigint('expires_at', { mode: 'number' }),
+  },
+  (t) => [index('mcp_api_keys_user_idx').on(t.userId), uniqueIndex('mcp_api_keys_hash_idx').on(t.keyHash)],
+)

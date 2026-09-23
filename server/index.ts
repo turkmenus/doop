@@ -40,6 +40,7 @@ import * as githubApp from './githubApp.ts'
 import { seed } from './seed.ts'
 import * as allowance from './allowance.ts'
 import * as modelAccounts from './modelAccounts.ts'
+import * as mcpKeys from './mcpKeys.ts'
 import { getLocalAgentPreference, saveLocalAgentPreference } from './localAgentPreferences.ts'
 import { serverTierInfo } from './agentModel.ts'
 import { serverImageGenEnabled } from './imageGen.ts'
@@ -734,6 +735,36 @@ app.post('/api/model-account/anthropic-key', async (req, res) => {
 app.delete('/api/model-account', async (req, res) => {
   await modelAccounts.disconnect(req.user!.id)
   res.json(accountView({ connected: false }))
+})
+
+app.get('/api/mcp-keys', async (req, res) => {
+  try {
+    const keys = await mcpKeys.listMcpKeys(req.user!.id)
+    res.json(keys)
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : 'could not list MCP keys' })
+  }
+})
+
+app.post('/api/mcp-keys', async (req, res) => {
+  try {
+    const name = String(req.body?.name ?? '')
+    const expiresInDays = req.body?.expiresInDays ? Number(req.body.expiresInDays) : undefined
+    const created = await mcpKeys.createMcpKey(req.user!.id, name, expiresInDays)
+    res.json(created)
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'could not create MCP key' })
+  }
+})
+
+app.delete('/api/mcp-keys/:id', async (req, res) => {
+  try {
+    const ok = await mcpKeys.revokeMcpKey(req.user!.id, req.params.id)
+    if (!ok) return res.status(404).json({ error: 'key not found' })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : 'could not revoke MCP key' })
+  }
 })
 
 app.get('/api/canvases', (req, res) =>

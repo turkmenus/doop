@@ -24,6 +24,7 @@ import { normalizeImportUrl } from './importer.ts'
 import { websiteAccessErrorMessage } from './websiteAccess.ts'
 import { mentionedRole } from '../shared/agents.ts'
 import * as allowance from './allowance.ts'
+import { verifyMcpKey } from './mcpKeys.ts'
 
 const INSTRUCTIONS = `Doop is a shared multiplayer design canvas: humans and AI agents design together in real time. Canvases contain frames — artboards that render complete HTML documents live for everyone viewing.
 
@@ -1440,10 +1441,26 @@ export async function handleMcpRequest(req: Request, res: Response) {
     })
     return
   }
-  /* OAuth gate: the 401 + WWW-Authenticate header is what triggers the
-     browser approval flow in MCP clients (RFC 9728 discovery). */
+  /* OAuth gate: try the OAuth session first. If absent, check for a static
+     Personal Access Token (Bearer doop_pat_... or X-API-Key). The 401 +
+     WWW-Authenticate header is what triggers browser approval in OAuth clients (RFC 9728). */
   const session = await auth.api.getMcpSession({ headers: fromNodeHeaders(req.headers) }).catch(() => null)
-  if (!session) {
+  let userId: string | undefined = session?.userId
+
+  if (!userId) {
+    const authHeader = req.headers.authorization
+    const rawKey = authHeader?.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : (req.headers['x-api-key'] as string | undefined)?.trim()
+    if (rawKey?.startsWith('doop_pat_')) {
+      const verified = await verifyMcpKey(rawKey)
+      if (verified) {
+        userId = verified.userId
+      }
+    }
+  }
+
+  if (!userId) {
     const origin = `${req.protocol}://${req.get('host')}`
     res
       .status(401)
@@ -1453,14 +1470,14 @@ export async function handleMcpRequest(req: Request, res: Response) {
       )
       .json({
         jsonrpc: '2.0',
-        error: { code: -32001, message: 'Unauthorized: this MCP server requires OAuth' },
+        error: { code: -32001, message: 'Unauthorized: this MCP server requires OAuth or a Personal Access Token' },
         id: null,
       })
     return
   }
   /* banning revokes browser sessions, but an already-issued MCP token keeps
      validating until it expires — refuse it here so a ban is total */
-  if (session.userId && (await isBanned(session.userId))) {
+  if (await isBanned(userId)) {
     res.status(403).json({
       jsonrpc: '2.0',
       error: { code: -32003, message: 'This account has been disabled on this server.' },
@@ -1472,21 +1489,19 @@ export async function handleMcpRequest(req: Request, res: Response) {
      grow — instrument it. `initialize` marks a fresh client session (and is
      the only message carrying the client's name); tool calls mark actual use,
      throttled because one design task is dozens of calls. */
-  if (session.userId) {
-    const msgs = Array.isArray(req.body) ? req.body : [req.body]
-    for (const msg of msgs) {
-      if (msg?.method === 'initialize') {
-        capture(session.userId, 'custom_agent_connected', {
-          agent_client: msg.params?.clientInfo?.name,
-          agent_client_version: msg.params?.clientInfo?.version,
-        })
-      } else if (msg?.method === 'tools/call') {
-        captureThrottled(session.userId, 'custom_agent_used', { first_tool: msg.params?.name })
-      }
+  const msgs = Array.isArray(req.body) ? req.body : [req.body]
+  for (const msg of msgs) {
+    if (msg?.method === 'initialize') {
+      capture(userId, 'custom_agent_connected', {
+        agent_client: msg.params?.clientInfo?.name,
+        agent_client_version: msg.params?.clientInfo?.version,
+      })
+    } else if (msg?.method === 'tools/call') {
+      captureThrottled(userId, 'custom_agent_used', { first_tool: msg.params?.name })
     }
   }
-  const owner = session.userId ? await getUserName(session.userId) : undefined
-  const server = buildMcpServer(owner, session.userId ?? undefined)
+  const owner = await getUserName(userId)
+  const server = buildMcpServer(owner, userId)
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   res.on('close', () => {
     /* the client is gone; there is nobody left to report a close failure to */

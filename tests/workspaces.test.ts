@@ -7,7 +7,7 @@ import { Client, startServer, type Server } from './harness.ts'
  * per-canvas rules keep working around it. Real server, real database.
  */
 
-const PORT = 5001
+const PORT = 4965
 
 let server: Server
 

@@ -24,7 +24,10 @@ import {
   DashTitle,
 } from '../components/ui/dash'
 
-type Pane = 'agent' | 'account'
+import { McpKeysManager } from '../components/McpKeysManager'
+import { Key } from 'iconoir-react'
+
+type Pane = 'agent' | 'account' | 'tokens'
 
 /**
  * Account settings. Today it holds one thing — which model account the Doop
@@ -82,6 +85,9 @@ export function Settings() {
           <DashNavItem icon={<IconSpark />} active={pane === 'agent'} onClick={() => setPane('agent')}>
             Doop Agent
           </DashNavItem>
+          <DashNavItem icon={<Key className="size-4" />} active={pane === 'tokens'} onClick={() => setPane('tokens')}>
+            MCP Access Tokens
+          </DashNavItem>
           <DashNavItem icon={<IconUser />} active={pane === 'account'} onClick={() => setPane('account')}>
             Your account
           </DashNavItem>
@@ -116,11 +122,15 @@ export function Settings() {
         <DashContent>
           <div className="flex items-start gap-4 md:items-end">
             <div>
-              <DashTitle>{pane === 'agent' ? 'Doop Agent' : 'Your account'}</DashTitle>
+              <DashTitle>
+                {pane === 'agent' ? 'Doop Agent' : pane === 'tokens' ? 'MCP Access Tokens' : 'Your account'}
+              </DashTitle>
               <DashSubtitle>
                 {pane === 'agent'
                   ? 'Which model account the agent runs on, for every canvas you work on.'
-                  : 'Who you are on every canvas — and how you get back into this one.'}
+                  : pane === 'tokens'
+                    ? 'Static bearer tokens to connect Cursor, Windsurf, or headless MCP agents without browser OAuth.'
+                    : 'Who you are on every canvas — and how you get back into this one.'}
               </DashSubtitle>
             </div>
           </div>
@@ -129,6 +139,9 @@ export function Settings() {
             <TabsList className="h-10 w-full border border-line bg-surface p-1 shadow-card">
               <TabsTrigger value="agent">
                 <IconSpark /> Doop Agent
+              </TabsTrigger>
+              <TabsTrigger value="tokens">
+                <Key className="size-3.5" /> Tokens
               </TabsTrigger>
               <TabsTrigger value="account">
                 <IconUser /> Your account
@@ -162,6 +175,10 @@ export function Settings() {
                 <ModelAccountPanel onChange={refresh} />
               </Card>
             </>
+          ) : pane === 'tokens' ? (
+            <div className="mt-4 max-w-[1000px] sm:mt-5">
+              <McpKeysManager />
+            </div>
           ) : (
             <AccountSettings />
           )}
