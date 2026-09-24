@@ -60,11 +60,13 @@ export function Settings() {
       ? allowance.byoKind === 'claude-local'
         ? 'Claude CLI selected — runs on your connected desktop.'
         : `Running on your ${allowance.byoKind === 'anthropic-key' ? 'Claude API key' : allowance.byoKind === 'openai-key' ? 'OpenAI key' : 'ChatGPT subscription'}.`
-      : allowance.limit <= 0
-        ? 'No free tasks on this server — connect an account to use the Doop Agent.'
-        : left === 0
-          ? 'Your free tasks are used up.'
-          : `${left} of ${allowance.limit} free task${allowance.limit === 1 ? '' : 's'} left.`
+      : allowance.serverProvider === 'ollama'
+        ? `Running on this server’s Ollama endpoint (${allowance.serverModel || 'hermes3'}).`
+        : allowance.limit <= 0
+          ? 'No free tasks on this server — connect an account to use the Doop Agent.'
+          : left === 0
+            ? 'Your free tasks are used up.'
+            : `${left} of ${allowance.limit} free task${allowance.limit === 1 ? '' : 's'} left.`
     : null
 
   return (

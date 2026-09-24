@@ -24,7 +24,23 @@ import type { AccountKind } from './modelAccounts.ts'
  * allowance via RESIDENT_TASK_LIMIT.
  */
 
-export const RESIDENT_TASK_LIMIT = Math.max(0, Number(process.env.RESIDENT_TASK_LIMIT ?? 0))
+export function activeServerProvider(): 'ollama' | 'anthropic' | 'azure' | null {
+  if (process.env.DOOP_AGENT_PROVIDER === 'ollama' || process.env.OLLAMA_BASE_URL || process.env.OLLAMA_MODEL) {
+    return 'ollama'
+  }
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
+  if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_DEPLOYMENT && process.env.AZURE_OPENAI_API_KEY) {
+    return 'azure'
+  }
+  return null
+}
+
+const hasServerProvider = Boolean(activeServerProvider())
+
+export const RESIDENT_TASK_LIMIT = Math.max(
+  0,
+  Number(process.env.RESIDENT_TASK_LIMIT ?? (hasServerProvider ? 1000 : 0)),
+)
 
 export interface Allowance {
   used: number
@@ -40,6 +56,8 @@ export interface Allowance {
   /** the agent is running on this user's own account right now — connecting
    *  takes effect immediately, it does not wait for the free tasks to run out */
   onOwnAccount: boolean
+  serverProvider?: 'ollama' | 'anthropic' | 'azure' | null
+  serverModel?: string
 }
 
 /** An OAuth access token ever issued to this user = an agent of their own
@@ -69,6 +87,9 @@ export async function getAllowance(userId: string): Promise<Allowance> {
     getStatus(userId).catch(() => ({ connected: false }) as Awaited<ReturnType<typeof getStatus>>),
     getLocalAgentPreference(userId),
   ])
+  const sProvider = activeServerProvider()
+  const sModel =
+    sProvider === 'ollama' ? process.env.OLLAMA_MODEL || process.env.DOOP_AGENT_MODEL || 'hermes3' : undefined
   return {
     used,
     limit: RESIDENT_TASK_LIMIT,
@@ -77,6 +98,8 @@ export async function getAllowance(userId: string): Promise<Allowance> {
     ...(local.enabled ? { byoKind: 'claude-local' as const } : model.kind ? { byoKind: model.kind } : {}),
     ...(model.email ? { byoEmail: model.email } : {}),
     onOwnAccount: local.enabled || model.connected,
+    serverProvider: sProvider,
+    ...(sModel ? { serverModel: sModel } : {}),
   }
 }
 

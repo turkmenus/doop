@@ -51,6 +51,11 @@ export function MeterLine({ allowance }: { allowance: Allowance | null }) {
       </span>
     )
   }
+  if (allowance.serverProvider === 'ollama') {
+    return (
+      <span className="text-[12px] text-[#1e7a4c]">Doop Agent on Ollama ({allowance.serverModel || 'hermes3'})</span>
+    )
+  }
   /* no free tier on this server: say what connecting gets them instead of
      counting tasks that don't exist */
   if (allowance.limit <= 0) {

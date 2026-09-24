@@ -5,6 +5,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { getAccount, withFreshToken, accountModelFor } from './modelAccounts.ts'
 import type { AccountKind, ModelAccount } from './modelAccounts.ts'
 import { ModelAuthError, ModelUnavailableError, runAzureTurn, runOpenAiTurn } from './openaiAgent.ts'
+import { runOllamaTurn } from './ollamaAgent.ts'
 import type { StopReason, TurnBlock } from './openaiAgent.ts'
 
 /**
@@ -25,7 +26,7 @@ import type { StopReason, TurnBlock } from './openaiAgent.ts'
  * else's request.
  */
 
-export type ServerProvider = 'anthropic' | 'azure'
+export type ServerProvider = 'anthropic' | 'azure' | 'ollama'
 export type Provider = ServerProvider | AccountKind | 'claude-local'
 
 export interface AgentTurnRequest {
@@ -156,18 +157,45 @@ function azureTier(): AgentModel | null {
   }
 }
 
+function ollamaTier(): AgentModel | null {
+  const baseUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
+  const model = process.env.OLLAMA_MODEL || process.env.DOOP_AGENT_MODEL || 'hermes3'
+  const apiKey = process.env.OLLAMA_API_KEY || process.env.OPENAI_API_KEY
+  const config = { baseUrl, model, apiKey }
+  return {
+    provider: 'ollama',
+    label: `Doop (${model})`,
+    async run(req) {
+      try {
+        return await runOllamaTurn(config, req)
+      } catch (err) {
+        if (err instanceof ModelAuthError) {
+          throw new Error(`Ollama / OpenAI provider rejected credentials — check OLLAMA_API_KEY`, { cause: err })
+        }
+        if (err instanceof ModelUnavailableError) {
+          throw new Error(`Ollama model "${model}" not found — check OLLAMA_MODEL or run "ollama pull ${model}"`, {
+            cause: err,
+          })
+        }
+        throw err
+      }
+    },
+  }
+}
+
 const serverTiers: Record<ServerProvider, () => AgentModel | null> = {
   anthropic: anthropicTier,
   azure: azureTier,
+  ollama: ollamaTier,
 }
 
 function serverProvider(): ServerProvider {
-  const chosen = process.env.DOOP_AGENT_PROVIDER || 'anthropic'
-  if (chosen in serverTiers) return chosen as ServerProvider
-  warnOnce(
-    `[doop-agent] DOOP_AGENT_PROVIDER="${chosen}" is not a server provider (anthropic | azure) — using anthropic.`,
-  )
-  return 'anthropic'
+  const chosen = process.env.DOOP_AGENT_PROVIDER
+  if (chosen && chosen in serverTiers) return chosen as ServerProvider
+  if (process.env.OLLAMA_BASE_URL || process.env.OLLAMA_MODEL) return 'ollama'
+  if (process.env.AZURE_OPENAI_ENDPOINT) return 'azure'
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
+  return (chosen as ServerProvider) || 'anthropic'
 }
 
 /** What the boot banner reports: which provider the free tier would run on,

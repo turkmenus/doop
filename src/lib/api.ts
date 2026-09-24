@@ -121,6 +121,8 @@ export interface Allowance {
   byoEmail?: string
   /** free tasks are spent and their own account is carrying the agent */
   onOwnAccount: boolean
+  serverProvider?: 'ollama' | 'anthropic' | 'azure' | null
+  serverModel?: string
 }
 
 export type ModelAccountKind = 'chatgpt' | 'openai-key' | 'anthropic-key'
