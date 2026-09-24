@@ -430,7 +430,7 @@ export async function runAzureTurn(config: AzureConfig, req: TurnRequest): Promi
 }
 
 const transports: Record<
-  Exclude<ModelAccount['kind'], 'anthropic-key'>,
+  Exclude<ModelAccount['kind'], 'anthropic-key' | 'ollama'>,
   (account: ModelAccount, req: TurnRequest) => Promise<TurnResult>
 > = {
   chatgpt: runChatgpt,
@@ -438,7 +438,9 @@ const transports: Record<
 }
 
 export function runOpenAiTurn(account: ModelAccount, req: TurnRequest): Promise<TurnResult> {
-  if (account.kind === 'anthropic-key') throw new Error('Anthropic keys require the Anthropic transport')
+  if (account.kind === 'anthropic-key' || account.kind === 'ollama') {
+    throw new Error('Anthropic and Ollama accounts require their dedicated transport')
+  }
   return transports[account.kind](account, req)
 }
 

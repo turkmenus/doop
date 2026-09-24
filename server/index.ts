@@ -732,6 +732,23 @@ app.post('/api/model-account/anthropic-key', async (req, res) => {
   }
 })
 
+app.post('/api/model-account/ollama', async (req, res) => {
+  try {
+    const baseUrl = String(req.body?.baseUrl ?? '')
+    const model = req.body?.model ? String(req.body.model) : undefined
+    const apiKey = req.body?.apiKey ? String(req.body.apiKey) : undefined
+    const previous = await modelAccounts.getAccount(req.user!.id)
+    const status = await modelAccounts.connectOllama(req.user!.id, { baseUrl, model, apiKey })
+    if (previous?.kind !== 'ollama') {
+      const preference = await getLocalAgentPreference(req.user!.id)
+      await saveLocalAgentPreference(req.user!.id, { ...preference, enabled: false })
+    }
+    res.json(accountView(status))
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'could not save that custom endpoint' })
+  }
+})
+
 app.delete('/api/model-account', async (req, res) => {
   await modelAccounts.disconnect(req.user!.id)
   res.json(accountView({ connected: false }))

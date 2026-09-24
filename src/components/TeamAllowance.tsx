@@ -47,7 +47,9 @@ export function MeterLine({ allowance }: { allowance: Allowance | null }) {
             ? 'Claude API key'
             : allowance.byoKind === 'openai-key'
               ? 'OpenAI key'
-              : 'ChatGPT'}
+              : allowance.byoKind === 'ollama'
+                ? 'custom Ollama endpoint'
+                : 'ChatGPT'}
       </span>
     )
   }

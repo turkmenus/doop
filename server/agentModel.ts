@@ -220,6 +220,7 @@ const BYO_LABELS: Record<AccountKind, string> = {
   chatgpt: 'ChatGPT',
   'openai-key': 'OpenAI',
   'anthropic-key': 'Claude API',
+  ollama: 'Ollama',
 }
 
 /* the OpenAI-shaped transports take one system string; cache breakpoints are
@@ -255,6 +256,28 @@ function byoModel(account: ModelAccount): AgentModel {
           }
           throw error
         }
+      },
+    }
+  }
+  if (account.kind === 'ollama') {
+    const baseUrl = account.accountId
+    if (!baseUrl) {
+      throw new ModelConfigurationError('Ollama / Custom endpoint Base URL is missing. Reconnect in Settings.')
+    }
+    const model = accountModelFor(account)
+    return {
+      provider: account.kind,
+      label: `Ollama (${model})`,
+      userId: account.userId,
+      run(req) {
+        return runOllamaTurn(
+          {
+            baseUrl,
+            model,
+            apiKey: account.apiKey,
+          },
+          req,
+        )
       },
     }
   }

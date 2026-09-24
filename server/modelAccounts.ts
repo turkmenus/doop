@@ -46,9 +46,9 @@ const REDIRECT_URI = process.env.CHATGPT_OAUTH_REDIRECT_URI || 'http://localhost
    fetch — an ordinary product User-Agent passes where no header at all does */
 const AUTH_USER_AGENT = process.env.CHATGPT_AUTH_USER_AGENT || 'doop/0.1 (+https://doop.design)'
 
-export type AccountKind = 'chatgpt' | 'openai-key' | 'anthropic-key'
+export type AccountKind = 'chatgpt' | 'openai-key' | 'anthropic-key' | 'ollama'
 
-const ACCOUNT_KINDS: readonly string[] = ['chatgpt', 'openai-key', 'anthropic-key'] satisfies AccountKind[]
+const ACCOUNT_KINDS: readonly string[] = ['chatgpt', 'openai-key', 'anthropic-key', 'ollama'] satisfies AccountKind[]
 
 export interface ModelAccount {
   userId: string
@@ -70,6 +70,7 @@ export interface AccountStatus {
   connected: boolean
   kind?: AccountKind
   email?: string
+  accountId?: string
   plan?: string
   /** the model tier in effect, resolved (never null in a status) */
   model?: string
@@ -118,6 +119,7 @@ export async function getStatus(userId: string): Promise<AccountStatus> {
     connected: true,
     kind: account.kind,
     ...(account.email ? { email: account.email } : {}),
+    ...(account.accountId ? { accountId: account.accountId } : {}),
     ...(account.plan ? { plan: account.plan } : {}),
     /* resolved, so the UI shows what will actually run rather than "default" */
     model: accountModelFor(account),
@@ -126,6 +128,7 @@ export async function getStatus(userId: string): Promise<AccountStatus> {
 }
 
 export function accountModelFor(account: Pick<ModelAccount, 'kind' | 'model'>): string {
+  if (account.kind === 'ollama') return account.model || 'hermes3'
   return account.kind === 'anthropic-key' ? normalizeClaudeModel(account.model) : modelFor(account)
 }
 
@@ -133,6 +136,10 @@ export function accountModelFor(account: Pick<ModelAccount, 'kind' | 'model'>): 
 export async function setAccountModel(userId: string, model: string): Promise<AccountStatus> {
   const account = await getAccount(userId)
   if (!account) throw new Error('no model account connected')
+  if (account.kind === 'ollama') {
+    await save({ ...account, model: model.trim() })
+    return getStatus(userId)
+  }
   const known = account.kind === 'anthropic-key' ? CLAUDE_MODEL_IDS.some((id) => id === model) : isKnownModel(model)
   if (!known) throw new Error('unknown model')
   await save({ ...account, model })
@@ -679,6 +686,27 @@ export async function connectAnthropicKey(userId: string, apiKey: string): Promi
     kind: 'anthropic-key',
     apiKey: key,
     model: previous?.kind === 'anthropic-key' ? previous.model : undefined,
+  })
+  return getStatus(userId)
+}
+
+export async function connectOllama(
+  userId: string,
+  opts: { baseUrl: string; model?: string; apiKey?: string },
+): Promise<AccountStatus> {
+  const baseUrl = opts.baseUrl.trim().replace(/\/+$/, '')
+  if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+    throw new Error('Base URL must start with http:// or https://')
+  }
+  const model = opts.model?.trim() || 'hermes3'
+  const apiKey = opts.apiKey?.trim() || undefined
+  await save({
+    userId,
+    kind: 'ollama',
+    accountId: baseUrl,
+    email: baseUrl,
+    apiKey,
+    model,
   })
   return getStatus(userId)
 }

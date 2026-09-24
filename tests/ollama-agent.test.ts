@@ -120,11 +120,15 @@ describe('Ollama / OpenAI-Compatible Agent Provider', () => {
       )
 
       // Verify request payload conversion
-      expect(capturedBody.model).toBe('hermes3')
-      expect(capturedBody.messages[0]).toEqual({ role: 'system', content: 'You are Doop resident designer.' })
-      expect(capturedBody.messages[1]).toEqual({ role: 'user', content: 'Design an ExileLab Hero card' })
-      expect(capturedBody.tools[0].type).toBe('function')
-      expect(capturedBody.tools[0].function.name).toBe('create_frame')
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody!
+      expect(body.model).toBe('hermes3')
+      expect(body.messages[0]).toEqual({ role: 'system', content: 'You are Doop resident designer.' })
+      expect(body.messages[1]).toEqual({ role: 'user', content: 'Design an ExileLab Hero card' })
+      expect(body.tools).toBeDefined()
+      const firstTool = body.tools?.[0]
+      expect(firstTool?.type).toBe('function')
+      expect(firstTool?.function.name).toBe('create_frame')
 
       // Verify response parsing
       expect(result.stop_reason).toBe('tool_use')
@@ -203,12 +207,16 @@ describe('Ollama / OpenAI-Compatible Agent Provider', () => {
       expect(result.content[0]).toEqual({ type: 'text', text: 'Refined the design.' })
 
       // Verify the tool call was converted to OpenAI tool_calls
-      const assistantMsg = capturedBody?.messages.find((m) => m.role === 'assistant')
-      expect(assistantMsg?.tool_calls?.[0].id).toBe('call_1')
-      expect(assistantMsg?.tool_calls?.[0].function.name).toBe('create_frame')
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody!
+      const assistantMsg = body.messages.find((m: { role: string }) => m.role === 'assistant')
+      expect(assistantMsg).toBeDefined()
+      const firstCall = assistantMsg?.tool_calls?.[0]
+      expect(firstCall?.id).toBe('call_1')
+      expect(firstCall?.function.name).toBe('create_frame')
 
       // Verify the tool result was converted to role: 'tool'
-      const toolMsg = capturedBody?.messages.find((m) => m.role === 'tool')
+      const toolMsg = body.messages.find((m: { role: string }) => m.role === 'tool')
       expect(toolMsg?.tool_call_id).toBe('call_1')
       expect(toolMsg?.content).toBe('Frame created successfully')
     } finally {

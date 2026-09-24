@@ -59,7 +59,15 @@ export function Settings() {
     ? allowance.byoModel
       ? allowance.byoKind === 'claude-local'
         ? 'Claude CLI selected — runs on your connected desktop.'
-        : `Running on your ${allowance.byoKind === 'anthropic-key' ? 'Claude API key' : allowance.byoKind === 'openai-key' ? 'OpenAI key' : 'ChatGPT subscription'}.`
+        : `Running on your ${
+            allowance.byoKind === 'anthropic-key'
+              ? 'Claude API key'
+              : allowance.byoKind === 'openai-key'
+                ? 'OpenAI key'
+                : allowance.byoKind === 'ollama'
+                  ? 'custom Ollama endpoint'
+                  : 'ChatGPT subscription'
+          }.`
       : allowance.serverProvider === 'ollama'
         ? `Running on this server’s Ollama endpoint (${allowance.serverModel || 'hermes3'}).`
         : allowance.limit <= 0

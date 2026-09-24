@@ -125,7 +125,7 @@ export interface Allowance {
   serverModel?: string
 }
 
-export type ModelAccountKind = 'chatgpt' | 'openai-key' | 'anthropic-key'
+export type ModelAccountKind = 'chatgpt' | 'openai-key' | 'anthropic-key' | 'ollama'
 
 /** An in-flight device sign-in: the user types `userCode` at `verificationUrl`
  *  and the server polls OpenAI until they approve. */
@@ -146,6 +146,7 @@ export interface ModelAccountStatus {
   connected: boolean
   kind?: ModelAccountKind
   email?: string
+  accountId?: string
   plan?: string
   /** the model tier this account runs on right now */
   model?: string
@@ -383,6 +384,8 @@ export const api = {
     req<ModelAccountStatus>('/api/model-account/openai-key', { method: 'POST', body: JSON.stringify({ apiKey }) }),
   connectAnthropicKey: (apiKey: string) =>
     req<ModelAccountStatus>('/api/model-account/anthropic-key', { method: 'POST', body: JSON.stringify({ apiKey }) }),
+  connectOllama: (opts: { baseUrl: string; model?: string; apiKey?: string }) =>
+    req<ModelAccountStatus>('/api/model-account/ollama', { method: 'POST', body: JSON.stringify(opts) }),
   disconnectModelAccount: () => req<ModelAccountStatus>('/api/model-account', { method: 'DELETE' }),
   setAgentModel: (model: string) =>
     req<ModelAccountStatus>('/api/model-account', { method: 'PATCH', body: JSON.stringify({ model }) }),

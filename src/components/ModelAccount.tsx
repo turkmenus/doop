@@ -107,7 +107,10 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   const [device, setDevice] = useState<DeviceFlow | null>(null)
   const [redirect, setRedirect] = useState('')
   const [apiKey, setApiKey] = useState('')
-  const [showKey, setShowKey] = useState<false | 'openai-key' | 'anthropic-key'>(false)
+  const [showKey, setShowKey] = useState<false | 'openai-key' | 'anthropic-key' | 'ollama'>(false)
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState('')
+  const [ollamaModel, setOllamaModel] = useState('')
+  const [ollamaApiKey, setOllamaApiKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [switchFailed, setSwitchFailed] = useState(false)
@@ -120,6 +123,9 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
       setDevice(null)
       setRedirect('')
       setApiKey('')
+      setOllamaBaseUrl('')
+      setOllamaModel('')
+      setOllamaApiKey('')
       setShowKey(false)
       setError('')
       setSwitchFailed(false)
@@ -263,6 +269,29 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
     }
   }
 
+  const saveOllama = async () => {
+    if (!ollamaBaseUrl.trim()) {
+      setError('Base URL is required (e.g. http://127.0.0.1:11434/v1)')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const next = await api.connectOllama({
+        baseUrl: ollamaBaseUrl.trim(),
+        model: ollamaModel.trim() || undefined,
+        apiKey: ollamaApiKey.trim() || undefined,
+      })
+      if (account?.kind !== 'ollama') await selectServer()
+      settle(next)
+      posthog.capture('model_account_connected', { kind: 'ollama' })
+    } catch (e) {
+      fail(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const pickModel = async (model: string) => {
     setBusy(true)
     setError('')
@@ -297,6 +326,7 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   const onChatgpt = account.connected && account.kind === 'chatgpt'
   const onKey = account.connected && account.kind === 'openai-key'
   const onClaudeKey = account.connected && account.kind === 'anthropic-key'
+  const onOllama = account.connected && account.kind === 'ollama'
   /* only one account is stored per user, so connecting one replaces the other */
   const replaces = account.connected
 
@@ -668,6 +698,154 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
         </div>
       </section>
 
+      <section className={planRow(onOllama && !local?.enabled)}>
+        <span className={planMark(onOllama && !local?.enabled)}>
+          <OllamaMark />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-[10px] max-md:flex-wrap max-md:items-start max-md:gap-x-[9px] max-md:gap-y-[6px]">
+            <h3 className="font-display text-[18px] font-extrabold normal-case tracking-[-0.02em] text-ink max-md:text-[17px]">
+              Ollama & Custom Endpoint
+            </h3>
+            <span className={planPill(onOllama)}>
+              {onOllama && showKey !== 'ollama'
+                ? local?.enabled
+                  ? 'Connected'
+                  : 'Active · Connected'
+                : 'Not connected'}
+            </span>
+          </div>
+          <p className="mt-1.5 text-[14px] leading-[1.55] text-ink-soft max-md:text-[13.5px]">
+            Connect your own Ollama, vLLM, OpenRouter, or any OpenAI-compatible API endpoint.
+          </p>
+
+          {onOllama && showKey !== 'ollama' ? (
+            <>
+              <dl className="mt-[14px] grid grid-cols-[auto_auto] items-center justify-start gap-x-[14px] gap-y-2 text-[13px] text-ink-soft max-md:grid-cols-1 max-md:gap-[3px]">
+                <dt>Endpoint</dt>
+                <dd className="min-w-0">
+                  <code className={planAsCode}>{account.accountId || account.email}</code>
+                </dd>
+                <dt className="max-md:mt-2">Model</dt>
+                <dd className="min-w-0">
+                  <code className={planAsCode}>{account.model || 'hermes3'}</code>
+                </dd>
+              </dl>
+              <div className={actionsRow}>
+                <div className="flex flex-wrap gap-2 max-md:[&>button]:flex-1">
+                  <Button
+                    disabled={busy}
+                    onClick={() => {
+                      setOllamaBaseUrl(account.accountId || account.email || '')
+                      setOllamaModel(account.model || 'hermes3')
+                      setOllamaApiKey('')
+                      setShowKey('ollama')
+                    }}
+                  >
+                    Edit endpoint
+                  </Button>
+                  {local?.enabled && (
+                    <Button
+                      disabled={busy}
+                      onClick={() => {
+                        selectServer().catch(fail)
+                      }}
+                    >
+                      Use instead
+                    </Button>
+                  )}
+                  <Button variant="danger" className={rowBtn} onClick={remove} disabled={busy}>
+                    Disconnect
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : showKey === 'ollama' ? (
+            <div className={planFlow}>
+              <div className="flex flex-col gap-3">
+                <div>
+                  <label className="mb-1.5 block text-[13px] font-medium text-ink">
+                    Base URL <span className="text-accent-ink">*</span>
+                  </label>
+                  <Input
+                    className={maInput}
+                    value={ollamaBaseUrl}
+                    onChange={(e) => setOllamaBaseUrl(e.target.value)}
+                    placeholder="http://127.0.0.1:11434/v1 or https://your-ollama-host/v1"
+                    autoFocus
+                    spellCheck={false}
+                  />
+                  <p className="mt-1 text-[12px] text-ink-faint">
+                    OpenAI-compatible /v1 endpoint (e.g. Ollama, OpenRouter, vLLM, LiteLLM)
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+                  <div>
+                    <label className="mb-1.5 block text-[13px] font-medium text-ink">Model Name</label>
+                    <Input
+                      className={maInput}
+                      value={ollamaModel}
+                      onChange={(e) => setOllamaModel(e.target.value)}
+                      placeholder="hermes3"
+                      spellCheck={false}
+                    />
+                    <p className="mt-1 text-[12px] text-ink-faint">Model identifier (e.g. hermes3, qwen2.5-coder)</p>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-[13px] font-medium text-ink">
+                      API Key <span className="font-normal text-ink-faint">(Optional)</span>
+                    </label>
+                    <Input
+                      className={maInput}
+                      value={ollamaApiKey}
+                      onChange={(e) => setOllamaApiKey(e.target.value)}
+                      placeholder="Bearer token or API key"
+                      type="password"
+                      spellCheck={false}
+                    />
+                    <p className="mt-1 text-[12px] text-ink-faint">Leave blank if no authentication required</p>
+                  </div>
+                </div>
+              </div>
+              <div className={maActions}>
+                <Button
+                  variant="primary"
+                  className={rowBtn}
+                  onClick={saveOllama}
+                  disabled={busy || !ollamaBaseUrl.trim()}
+                >
+                  {busy ? 'Saving…' : onOllama ? 'Update endpoint' : 'Connect endpoint'}
+                </Button>
+                <Button variant="ghost" className={rowBtn} onClick={() => setShowKey(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className={actionsRow}>
+              <div className="flex flex-wrap gap-[9px]">
+                <ToggleChip state="idle">hermes3</ToggleChip>
+                <ToggleChip state="idle">qwen2.5-coder</ToggleChip>
+                <ToggleChip state="idle">llama3.1</ToggleChip>
+                <ToggleChip state="idle">deepseek</ToggleChip>
+              </div>
+              <Button
+                className={rowBtn}
+                onClick={() => {
+                  setOllamaBaseUrl(account.accountId || '')
+                  setOllamaModel(account.model || 'hermes3')
+                  setOllamaApiKey('')
+                  setShowKey('ollama')
+                }}
+                disabled={busy}
+              >
+                {replaces ? 'Use instead' : 'Connect'}
+              </Button>
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* the browser cannot run the local CLI, so the plan closes the list as a pointer to the desktop app */}
       {!desktop && <LocalClaudeRow />}
       {error && <p className="mt-[10px] text-[12.5px] text-accent-ink">{error}</p>}
@@ -677,6 +855,29 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
 
 function Tick() {
   return <CheckIcon width={13} height={13} strokeWidth={2.5} color="#1a6b43" aria-hidden />
+}
+
+function OllamaMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="2" y="3" width="20" height="7" rx="2" />
+      <rect x="2" y="14" width="20" height="7" rx="2" />
+      <line x1="6" y1="6.5" x2="6.01" y2="6.5" strokeWidth="2.5" />
+      <line x1="10" y1="6.5" x2="10.01" y2="6.5" strokeWidth="2.5" />
+      <line x1="6" y1="17.5" x2="6.01" y2="17.5" strokeWidth="2.5" />
+      <line x1="10" y1="17.5" x2="10.01" y2="17.5" strokeWidth="2.5" />
+    </svg>
+  )
 }
 
 /** OpenAI's mark, inlined so the page needs no external request. */
