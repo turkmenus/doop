@@ -144,7 +144,8 @@ export function ShareModal({
   async function copy() {
     setError(null)
     try {
-      await navigator.clipboard.writeText(`${location.origin}/c/${canvas.id}`)
+      const prefix = location.pathname.startsWith('/d/') ? '/d/' : '/c/'
+      await navigator.clipboard.writeText(`${location.origin}${prefix}${canvas.id}`)
       posthog.capture('canvas_link_shared')
       onCopied()
     } catch {

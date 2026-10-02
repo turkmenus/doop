@@ -47,7 +47,7 @@ export function Settings() {
   /* arriving from a canvas (the free-tier wall) should not cost you your
      place — only same-origin canvas paths are honoured */
   const from = new URLSearchParams(location.search).get('from')
-  const back = from && /^\/c\/[A-Za-z0-9_-]+$/.test(from) ? from : '/'
+  const back = from && (/^\/c\/[A-Za-z0-9_-]+$/.test(from) || /^\/d\/[A-Za-z0-9_-]+$/.test(from)) ? from : '/'
 
   async function createCanvas() {
     const canvas = await api.createCanvas('Untitled canvas')

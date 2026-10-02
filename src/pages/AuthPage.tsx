@@ -317,7 +317,7 @@ export function AuthPage() {
           try {
             const canvases: { id: string; ownerId?: string }[] = await (await fetch('/api/canvases')).json()
             const own = canvases.find((c) => c.ownerId)
-            if (own) location.href = `/c/${own.id}`
+            if (own) location.href = `/d/${own.id}`
           } catch {
             /* fall through to the session-gated re-render */
           }

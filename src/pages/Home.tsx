@@ -14,6 +14,7 @@ import {
   ConnectCard,
   IconAutomations,
   IconCommunity,
+  IconDeck,
   IconIntegrations,
   IconGrid,
   IconList,
@@ -44,7 +45,9 @@ import {
 import {
   BuildingIcon,
   CopyIcon,
+  GridIcon,
   MoreHorizontalIcon,
+  PlayIcon,
   PlusIcon,
   SearchIcon,
   ShareIcon,
@@ -68,8 +71,12 @@ import { cn } from '@/lib/utils'
 /** an agent that worked this recently is treated as still at the desk */
 const LIVE_WINDOW = 5 * 60 * 1000
 
-/** the three fixed views, or one workspace (`ws:<id>`) */
-type Scope = 'all' | 'mine' | 'shared' | `ws:${string}`
+/** the three fixed views, decks view, or one workspace (`ws:<id>`) */
+type Scope = 'all' | 'mine' | 'shared' | 'decks' | `ws:${string}`
+
+export function isDeck(c: { name: string }): boolean {
+  return /deck|presentation|slayt|sunum/i.test(c.name)
+}
 
 function workspaceOf(scope: Scope): string | undefined {
   return scope.startsWith('ws:') ? scope.slice(3) : undefined
@@ -84,11 +91,15 @@ const cardCls = cn(
   'bg-[color-mix(in_srgb,var(--surface)_72%,transparent)] backdrop-blur-[6px]',
 )
 
-export function Home() {
+export function Home({ initialScope }: { initialScope?: Scope } = {}) {
   const [canvases, setCanvases] = useState<CanvasMeta[] | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [activity, setActivity] = useState<HomeActivity[]>([])
-  const [scope, setScope] = useState<Scope>('all')
+  const [scope, setScope] = useState<Scope>(() => {
+    if (initialScope) return initialScope
+    if (typeof location !== 'undefined' && location.pathname.startsWith('/decks')) return 'decks'
+    return 'all'
+  })
   const [query, setQuery] = useState('')
   const [view, setView] = useState<'grid' | 'list'>('grid')
   const [shareCanvas, setShareCanvas] = useState<Canvas | null>(null)
@@ -135,14 +146,28 @@ export function Home() {
      without a plan answers with the wall instead */
   async function createCanvas() {
     const workspaceId = workspaceOf(scope)
+    const isDeckScope = scope === 'decks'
+    const name = isDeckScope ? 'Untitled deck' : 'Untitled canvas'
     try {
-      const canvas = await api.createCanvas('Untitled canvas', workspaceId)
-      posthog.capture('canvas_created', { workspace: !!workspaceId })
-      open(canvas.id, canvas.name)
+      const canvas = await api.createCanvas(name, workspaceId)
+      posthog.capture(isDeckScope ? 'deck_created' : 'canvas_created', { workspace: !!workspaceId })
+      if (isDeckScope) {
+        navigate(`/d/${canvas.id}`)
+      } else {
+        open(canvas.id, canvas.name)
+      }
     } catch (error) {
       const walled = paywalledWorkspace(error)
-      if (walled) setUpgrade({ workspaceId: walled, reason: 'Adding a canvas to a workspace needs a Team plan.' })
-      else showToast(errorMessage(error, 'Couldn’t create the canvas'))
+      if (walled) {
+        setUpgrade({
+          workspaceId: walled,
+          reason: isDeckScope
+            ? 'Adding a deck to a workspace needs a Team plan.'
+            : 'Adding a canvas to a workspace needs a Team plan.',
+        })
+      } else {
+        showToast(errorMessage(error, isDeckScope ? 'Couldn’t create the deck' : 'Couldn’t create the canvas'))
+      }
     }
   }
 
@@ -191,6 +216,15 @@ export function Home() {
   /* Figma-style in the desktop shell: the canvas gets its own tab and Home
      stays put. In the browser it's a plain in-page navigation. */
   function open(id: string, title?: string) {
+    if (scope === 'decks') {
+      navigate(`/d/${id}`)
+      return
+    }
+    const target = canvases?.find((c) => c.id === id)
+    if (target && isDeck(target)) {
+      navigate(`/d/${id}`)
+      return
+    }
     if (!openCanvasTab(id, title)) navigate(`/c/${id}`)
   }
 
@@ -218,6 +252,7 @@ export function Home() {
     all: canvases?.length ?? 0,
     mine: canvases?.filter((c) => !c.shared).length ?? 0,
     shared: canvases?.filter((c) => c.shared).length ?? 0,
+    decks: canvases?.filter(isDeck).length ?? 0,
   }
 
   const scopedWorkspace = workspaceOf(scope)
@@ -234,9 +269,13 @@ export function Home() {
     const q = query.trim().toLowerCase()
     const ws = workspaceOf(scope)
     return (canvases ?? [])
-      .filter((c) =>
-        ws ? c.workspaceId === ws : scope === 'mine' ? !c.shared : scope === 'shared' ? !!c.shared : true,
-      )
+      .filter((c) => {
+        if (scope === 'decks') return isDeck(c)
+        if (ws) return c.workspaceId === ws
+        if (scope === 'mine') return !c.shared
+        if (scope === 'shared') return !!c.shared
+        return true
+      })
       .filter((c) => !q || c.name.toLowerCase().includes(q))
   }, [canvases, scope, query])
 
@@ -277,7 +316,20 @@ export function Home() {
             label="All canvases"
             count={counts.all}
             on={scope === 'all'}
-            go={() => setScope('all')}
+            go={() => {
+              setScope('all')
+              history.pushState(null, '', '/')
+            }}
+          />
+          <NavItem
+            icon={<IconDeck />}
+            label="Decks"
+            count={counts.decks}
+            on={scope === 'decks'}
+            go={() => {
+              setScope('decks')
+              history.pushState(null, '', '/decks')
+            }}
           />
           <NavItem
             icon={<IconUser />}
@@ -428,7 +480,7 @@ export function Home() {
             </Button>
           )}
           <Button variant="primary" className="min-h-10 px-3 md:min-h-0 md:px-3.5" onClick={createCanvas}>
-            <span className="max-md:hidden">+ New canvas</span>
+            <span className="max-md:hidden">{scope === 'decks' ? '+ New deck' : '+ New canvas'}</span>
             <span className="hidden max-md:inline">+ New</span>
           </Button>
           <AccountMenu />
@@ -452,6 +504,18 @@ export function Home() {
                     >
                       People &amp; billing
                     </button>
+                  </DashSubtitle>
+                </>
+              ) : scope === 'decks' ? (
+                <>
+                  <DashTitle>
+                    Decks
+                    <em className="not-italic text-brand">.</em>
+                  </DashTitle>
+                  <DashSubtitle>
+                    {canvases === null
+                      ? '…'
+                      : `${counts.decks} presentation deck${counts.decks === 1 ? '' : 's'} · 16:9 interactive slides`}
                   </DashSubtitle>
                 </>
               ) : (
@@ -509,6 +573,7 @@ export function Home() {
             >
               <TabsList className="h-10 w-full border border-line bg-surface p-1 shadow-card">
                 <TabsTrigger value="all">All · {counts.all}</TabsTrigger>
+                <TabsTrigger value="decks">Decks · {counts.decks}</TabsTrigger>
                 <TabsTrigger value="mine">Mine · {counts.mine}</TabsTrigger>
                 <TabsTrigger value="shared">Shared · {counts.shared}</TabsTrigger>
               </TabsList>
@@ -554,15 +619,19 @@ export function Home() {
                         cardCls,
                         'flex min-h-16 flex-col items-center justify-center gap-3.5 px-4 py-6 text-center text-ink hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand xs:min-h-full',
                       )}
-                      aria-label="Create a new canvas"
+                      aria-label={scope === 'decks' ? 'Create a new deck' : 'Create a new canvas'}
                       onClick={createCanvas}
                     >
                       <span className="grid size-8 place-items-center rounded-lg bg-brand text-white">
                         <PlusIcon width={20} height={20} strokeWidth={1.8} />
                       </span>
                       <span>
-                        <span className="block font-display text-[13.5px] font-semibold">New canvas</span>
-                        <span className="mt-[5px] block text-[11.5px] text-ink-soft">Start from scratch</span>
+                        <span className="block font-display text-[13.5px] font-semibold">
+                          {scope === 'decks' ? 'New deck' : 'New canvas'}
+                        </span>
+                        <span className="mt-[5px] block text-[11.5px] text-ink-soft">
+                          {scope === 'decks' ? '16:9 presentation' : 'Start from scratch'}
+                        </span>
                       </span>
                     </button>
                   )}
@@ -579,6 +648,11 @@ export function Home() {
                         <div className="relative grid aspect-[16/10] place-items-center overflow-hidden border-b border-line-soft [background:radial-gradient(circle,var(--dot)_1px,transparent_1px)_0_0/18px_18px,var(--paper-deep)]">
                           <Preview canvas={c} />
                           <AgentStack canvas={c} />
+                          {isDeck(c) && (
+                            <span className="absolute left-2 bottom-2 rounded bg-paper-deep/90 px-1.5 py-0.5 font-mono text-[9.5px] font-semibold text-accent-ink shadow-sm backdrop-blur-[4px]">
+                              DECK
+                            </span>
+                          )}
                         </div>
                         <div className="px-3 pb-3 pt-2.5">
                           <div className="truncate font-display text-[13.5px] font-semibold">{c.name}</div>
@@ -616,8 +690,13 @@ export function Home() {
                         <span className="grid h-9 w-[58px] flex-none place-items-center overflow-hidden rounded-[7px] border border-line-soft bg-paper-deep">
                           <Preview canvas={c} blankSize="text-[9px]" />
                         </span>
-                        <span className="min-w-0 flex-1 truncate font-display text-[13.5px] font-semibold">
-                          {c.name}
+                        <span className="min-w-0 flex-1 truncate font-display text-[13.5px] font-semibold flex items-center gap-2">
+                          <span className="truncate">{c.name}</span>
+                          {isDeck(c) && (
+                            <span className="rounded bg-paper-deep px-1.5 py-0.5 font-mono text-[9px] font-semibold text-accent-ink">
+                              DECK
+                            </span>
+                          )}
                         </span>
                         <span className="hidden w-[82px] flex-none text-xs text-ink-faint sm:block">
                           {c.frameCount} frame{c.frameCount === 1 ? '' : 's'}
@@ -874,6 +953,13 @@ function CanvasActions({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-[190px] rounded-[14px] corner-squircle border-0 shadow-elevation-2">
+        <DropdownMenuItem onSelect={() => navigate(`/c/${canvas.id}`)}>
+          <GridIcon className="size-4" /> Open Canvas
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => navigate(`/d/${canvas.id}`)}>
+          <PlayIcon className="size-4" /> Open Deck
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onShare}>
           <ShareIcon className="size-4" /> Share
         </DropdownMenuItem>

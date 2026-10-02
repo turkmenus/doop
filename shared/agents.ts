@@ -91,6 +91,7 @@ export const DEFAULT_ROLE_ID = 'doop'
 export const PIPELINE_PRESETS: { id: string; label: string; roles: string[] }[] = [
   { id: 'solo', label: 'Just Doop', roles: ['doop'] },
   { id: 'ship', label: 'Design → polish', roles: ['doop', 'polish'] },
+  { id: 'deck', label: 'Deck: Copy → Brand → Polish', roles: ['copy', 'brand', 'polish'] },
   { id: 'full', label: 'Full pipeline', roles: ['doop', 'copy', 'brand', 'a11y', 'polish'] },
   { id: 'audit', label: 'Review only', roles: ['ux', 'brand', 'a11y'] },
 ]

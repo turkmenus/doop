@@ -32,6 +32,7 @@ import {
   LogOutIcon,
   PulseIcon,
   ShieldIcon,
+  LayersIcon,
   SparkIcon,
   UserIcon,
   UsersIcon,
@@ -165,6 +166,7 @@ export function ConnectCard() {
 const rail = { width: 15, height: 15, 'aria-hidden': true } as const
 
 export const IconGrid = () => <GridIcon {...rail} />
+export const IconDeck = () => <LayersIcon {...rail} />
 export const IconList = () => <ListIcon {...rail} />
 export const IconUser = () => <UserIcon {...rail} />
 export const IconShare = () => <UsersIcon {...rail} />

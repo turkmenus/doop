@@ -42,7 +42,7 @@ import * as allowance from './allowance.ts'
 import * as modelAccounts from './modelAccounts.ts'
 import * as mcpKeys from './mcpKeys.ts'
 import { getLocalAgentPreference, saveLocalAgentPreference } from './localAgentPreferences.ts'
-import { serverTierInfo } from './agentModel.ts'
+import { serverTierInfo, pickModel } from './agentModel.ts'
 import { serverImageGenEnabled } from './imageGen.ts'
 import { AGENT_MODELS } from './openaiAgent.ts'
 import { mentionedRole } from '../shared/agents.ts'
@@ -752,6 +752,109 @@ app.post('/api/model-account/ollama', async (req, res) => {
 app.delete('/api/model-account', async (req, res) => {
   await modelAccounts.disconnect(req.user!.id)
   res.json(accountView({ connected: false }))
+})
+
+/* ── AI Deck Generator ──────────────────────────────────────────────────────
+   POST /api/canvases/:id/deck-ai
+   Body: { prompt, slideCount?, theme?, language? }
+   Returns: { specs: DeckSlideSpec[], model: string }
+   Uses user's connected model account or server tier. 503 when no model. */
+app.post('/api/canvases/:id/deck-ai', async (req, res) => {
+  const canvas = store.getCanvas(req.params.id)
+  if (!canvas) return res.status(404).json({ error: 'Canvas not found' })
+  if (!canAccessCanvas(req.user!.id, canvas)) return res.status(403).json({ error: 'No access' })
+
+  const prompt = String(req.body?.prompt ?? '').trim()
+  const slideCount = Math.max(2, Math.min(Number(req.body?.slideCount ?? 5), 8))
+  const theme = String(req.body?.theme ?? 'modern-dark')
+  const language = String(req.body?.language ?? 'en')
+
+  if (!prompt) return res.status(400).json({ error: 'prompt is required' })
+
+  const model = await pickModel(req.user!.id)
+  if (!model) {
+    return res.status(503).json({
+      error:
+        'No AI model available. Connect an OpenAI or Anthropic key in Settings → AI Model, or ask your admin to configure a server AI key.',
+      code: 'no_model',
+    })
+  }
+
+  const LAYOUTS = ['cover', 'agenda', 'metrics', 'split', 'swot', 'roadmap', 'quote', 'conclusion']
+  const THEMES = ['modern-dark', 'clean-light', 'cyber-neon', 'executive-gold', 'swiss-minimal', 'ocean-deep']
+
+  const systemPrompt = `You are a world-class presentation designer. Generate a ${slideCount}-slide professional presentation deck as a JSON array.
+
+Each slide object has this exact shape:
+{ layout, theme, data }
+
+layout must be one of: ${LAYOUTS.join(', ')}
+theme must be: ${theme}
+data fields by layout:
+- cover: badge, title, subtitle, author, date
+- agenda/split: badge, title, subtitle, columns (array of {title, bullets[]})
+- metrics: badge, title, subtitle, metrics (array of {value, label, change}, exactly 3 items)
+- swot: badge, title, subtitle, swot ({strengths[], weaknesses[], opportunities[], threats[]})
+- roadmap: badge, title, subtitle, timeline (array of {phase, title, desc}, 3-5 items)
+- quote: badge, title, quote ({text, author, role})
+- conclusion: badge, title, subtitle, description, contact ({email, web})
+
+Rules:
+- Start with cover, end with conclusion.
+- Write ALL content in ${language === 'tr' ? 'Turkish' : 'English'}.
+- Make content specific and compelling for the topic.
+- badge must be 2-4 words, ALL CAPS.
+- metrics must have realistic bold values (e.g. "$4.8M", "185K", "99.4%").
+- Bullets must be 6-12 words, punchy.
+- Return ONLY a valid JSON array — no markdown, no code fences, no commentary.`
+
+  try {
+    const result = await model.run({
+      system: [{ text: systemPrompt }],
+      tools: [],
+      messages: [{ role: 'user', content: `Create a ${slideCount}-slide presentation about: ${prompt}` }],
+      maxTokens: 4096,
+    })
+
+    const textBlock = result.content.find((b) => b.type === 'text')
+    const raw = textBlock && 'text' in textBlock ? String(textBlock.text).trim() : ''
+    const cleaned = raw
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/i, '')
+      .trim()
+
+    let specs: unknown[]
+    try {
+      specs = JSON.parse(cleaned)
+      if (!Array.isArray(specs)) throw new Error('not an array')
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON — try again', raw: cleaned.slice(0, 500) })
+    }
+
+    const validated = specs
+      .filter((s): s is Record<string, unknown> => s !== null && typeof s === 'object')
+      .filter((s) => typeof s.layout === 'string' && LAYOUTS.includes(s.layout as string))
+      .map((s) => ({
+        layout: s.layout,
+        theme: typeof s.theme === 'string' && THEMES.includes(s.theme) ? s.theme : theme,
+        data: typeof s.data === 'object' && s.data !== null ? s.data : {},
+      }))
+
+    if (validated.length === 0) {
+      return res.status(500).json({ error: 'AI returned no valid slides — try again' })
+    }
+
+    res.json({ specs: validated, model: model.label })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('auth') || msg.includes('key') || msg.includes('401')) {
+      return res
+        .status(401)
+        .json({ error: 'AI model authentication failed. Reconnect your key in Settings.', code: 'auth_error' })
+    }
+    console.error('[deck-ai] error:', err)
+    res.status(500).json({ error: 'AI generation failed — try again' })
+  }
 })
 
 app.get('/api/mcp-keys', async (req, res) => {

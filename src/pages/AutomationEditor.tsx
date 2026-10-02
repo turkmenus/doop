@@ -1001,7 +1001,7 @@ function RunsPanel({
                     <button
                       type="button"
                       className="self-start text-xs font-semibold text-accent-ink hover:underline"
-                      onClick={() => navigate(`/c/${r.canvasId}`)}
+                      onClick={() => navigate(`/d/${r.canvasId}`)}
                     >
                       Open {canvasName(r.canvasId) ?? 'canvas'} →
                     </button>

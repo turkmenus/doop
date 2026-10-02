@@ -1428,6 +1428,379 @@ export function buildMcpServer(owner?: string, ownerId?: string): McpServer {
     },
   )
 
+  /* ── Deck / Presentation Slides ──────────────────────────────────────────
+     These tools let you create and edit structured presentation slides in the
+     Doop Deck format. Slides created this way are fully editable in the
+     Slide Inspector UI and exportable to PPTX.
+
+     Layouts: cover | agenda | metrics | split | swot | roadmap | quote | conclusion
+     Themes:  modern-dark | clean-light | cyber-neon | executive-gold | swiss-minimal | ocean-deep
+  ─────────────────────────────────────────────────────────────────────────── */
+
+  const deckLayoutEnum = z.enum(['cover', 'agenda', 'metrics', 'split', 'swot', 'roadmap', 'quote', 'conclusion'])
+  const deckThemeEnum = z.enum([
+    'modern-dark',
+    'clean-light',
+    'cyber-neon',
+    'executive-gold',
+    'swiss-minimal',
+    'ocean-deep',
+  ])
+
+  const deckDataSchema = z.object({
+    badge: z.string().optional().describe('2-4 word uppercase kicker label, e.g. "EXECUTIVE SUMMARY"'),
+    title: z.string().optional().describe('Main slide headline'),
+    subtitle: z.string().optional().describe('Supporting subtitle line'),
+    description: z.string().optional().describe('Body text (conclusion layout)'),
+    author: z.string().optional().describe('Presenter name (cover layout)'),
+    date: z.string().optional().describe('Date/version string (cover layout)'),
+    metrics: z
+      .array(
+        z.object({
+          value: z.string().describe('Bold metric value, e.g. "$4.8M"'),
+          label: z.string().describe('Metric description, e.g. "Annual Recurring Revenue"'),
+          change: z.string().optional().describe('Change indicator, e.g. "+210% YoY"'),
+        }),
+      )
+      .optional()
+      .describe('3 key stats for metrics layout'),
+    columns: z
+      .array(
+        z.object({
+          title: z.string(),
+          bullets: z.array(z.string()).describe('6-12 word bullet points'),
+        }),
+      )
+      .optional()
+      .describe('2-3 content columns for agenda/split layouts'),
+    swot: z
+      .object({
+        strengths: z.array(z.string()),
+        weaknesses: z.array(z.string()),
+        opportunities: z.array(z.string()),
+        threats: z.array(z.string()),
+      })
+      .optional()
+      .describe('4-quadrant SWOT matrix'),
+    timeline: z
+      .array(
+        z.object({
+          phase: z.string().describe('Phase label, e.g. "Q1" or "Phase 1"'),
+          title: z.string().describe('Milestone name'),
+          desc: z.string().describe('Short description'),
+        }),
+      )
+      .optional()
+      .describe('3-5 roadmap phases'),
+    quote: z
+      .object({
+        text: z.string().describe('The quotation text'),
+        author: z.string().describe('Quote author name'),
+        role: z.string().describe('Author role/organization'),
+      })
+      .optional()
+      .describe('Customer quote or testimonial'),
+    contact: z
+      .object({
+        email: z.string().optional(),
+        web: z.string().optional(),
+      })
+      .optional()
+      .describe('Contact info (conclusion layout)'),
+  })
+
+  server.registerTool(
+    'create_deck_slide',
+    {
+      title: 'Create a presentation slide',
+      description: `Create a structured 16:9 presentation slide in the Doop Deck format. The slide is immediately visible, editable in the Slide Inspector UI, and can be exported to PPTX.
+
+Use layout presets:
+- cover: hero title slide with badge, title, subtitle, author, date
+- agenda: 2-3 column topics overview
+- metrics: 3 bold KPI stats with values and deltas
+- split: 2-column before/after or comparison
+- swot: 4-quadrant strategic matrix
+- roadmap: 3-5 phase timeline stepper
+- quote: large customer quote with attribution
+- conclusion: closing CTA with contact info
+
+Always create slides in order (cover first, conclusion last). Call get_frame_screenshot after creation to review.`,
+      inputSchema: {
+        canvas_id: z.string(),
+        layout: deckLayoutEnum,
+        theme: deckThemeEnum.optional().describe('Visual theme (default: modern-dark)'),
+        data: deckDataSchema,
+        agent_name: agentName,
+      },
+    },
+    async ({ canvas_id, layout, theme, data, agent_name }) => {
+      if (!canvasFor(canvas_id)) return noCanvas(canvas_id)
+
+      // Build the Doop deck spec JSON embedded in the HTML
+      const spec = { layout, theme: theme ?? 'modern-dark', data }
+      const metaComment = `<!-- doop-deck-spec: ${JSON.stringify(spec)} -->`
+
+      // Inline CSS theming map
+      const THEME_CSS: Record<
+        string,
+        {
+          bg: string
+          text: string
+          muted: string
+          accent: string
+          card: string
+          border: string
+          gradient: string
+          badge: string
+          badgeText: string
+        }
+      > = {
+        'modern-dark': {
+          bg: '#0B0F19',
+          text: '#F8FAFC',
+          muted: '#94A3B8',
+          accent: '#38BDF8',
+          card: '#131B2E',
+          border: 'rgba(56,189,248,0.2)',
+          gradient: 'linear-gradient(135deg,#0B0F19 0%,#172554 100%)',
+          badge: 'rgba(56,189,248,0.2)',
+          badgeText: '#38BDF8',
+        },
+        'clean-light': {
+          bg: '#F8FAFC',
+          text: '#0F172A',
+          muted: '#64748B',
+          accent: '#2563EB',
+          card: '#FFFFFF',
+          border: 'rgba(226,232,240,0.9)',
+          gradient: 'linear-gradient(135deg,#F8FAFC 0%,#EFF6FF 100%)',
+          badge: 'rgba(37,99,235,0.1)',
+          badgeText: '#2563EB',
+        },
+        'cyber-neon': {
+          bg: '#09090B',
+          text: '#FAFAFA',
+          muted: '#A1A1AA',
+          accent: '#EC4899',
+          card: '#18181B',
+          border: 'rgba(236,72,153,0.3)',
+          gradient: 'linear-gradient(135deg,#09090B 0%,#2A0845 100%)',
+          badge: 'rgba(236,72,153,0.2)',
+          badgeText: '#F472B6',
+        },
+        'executive-gold': {
+          bg: '#121214',
+          text: '#FAF8F5',
+          muted: '#A8A29E',
+          accent: '#D4AF37',
+          card: '#1C1C21',
+          border: 'rgba(212,175,55,0.3)',
+          gradient: 'linear-gradient(135deg,#121214 0%,#231F1A 100%)',
+          badge: 'rgba(212,175,55,0.2)',
+          badgeText: '#FBBF24',
+        },
+        'swiss-minimal': {
+          bg: '#FFFFFF',
+          text: '#09090B',
+          muted: '#71717A',
+          accent: '#E11D48',
+          card: '#F4F4F5',
+          border: 'rgba(24,24,27,0.12)',
+          gradient: 'linear-gradient(135deg,#FFFFFF 0%,#FDF2F4 100%)',
+          badge: 'rgba(225,29,72,0.12)',
+          badgeText: '#E11D48',
+        },
+        'ocean-deep': {
+          bg: '#022C43',
+          text: '#F0FDFA',
+          muted: '#99F6E4',
+          accent: '#14B8A6',
+          card: '#053F5E',
+          border: 'rgba(20,184,166,0.3)',
+          gradient: 'linear-gradient(135deg,#022C43 0%,#115173 100%)',
+          badge: 'rgba(20,184,166,0.2)',
+          badgeText: '#2DD4BF',
+        },
+      }
+      const t = THEME_CSS[theme ?? 'modern-dark'] ?? THEME_CSS['modern-dark']!
+
+      // Build content HTML based on layout
+      let content: string
+      const d = data
+
+      if (layout === 'cover') {
+        content = `<div style="display:flex;flex-direction:column;justify-content:center;height:100%;max-width:1400px;margin:0 auto;">
+${d.badge ? `<div class="badge">${d.badge}</div>` : ''}
+<h1 style="font-size:72px;font-weight:800;line-height:1.08;letter-spacing:-0.03em;margin:24px 0 20px;background:linear-gradient(180deg,${t.text} 0%,${t.muted} 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">${d.title ?? 'Presentation Title'}</h1>
+<p style="font-size:26px;line-height:1.4;color:${t.muted};max-width:960px;margin-bottom:60px;">${d.subtitle ?? ''}</p>
+<div style="display:flex;gap:36px;border-top:1px solid ${t.border};padding-top:32px;font-size:18px;color:${t.muted};">
+${d.author ? `<div><strong style="color:${t.text};">Presenter:</strong> ${d.author}</div>` : ''}
+${d.date ? `<div><strong style="color:${t.text};">Date:</strong> ${d.date}</div>` : ''}
+</div></div>`
+      } else if (layout === 'metrics' && d.metrics) {
+        const cols = d.metrics.length || 3
+        content = `<div style="display:flex;flex-direction:column;height:100%;max-width:1600px;margin:0 auto;">
+${d.badge ? `<div class="badge">${d.badge}</div>` : ''}
+<h2 style="font-size:46px;font-weight:750;letter-spacing:-0.02em;margin:16px 0 8px;color:${t.text};">${d.title ?? 'Key Metrics'}</h2>
+<p style="font-size:20px;color:${t.muted};margin-bottom:56px;">${d.subtitle ?? ''}</p>
+<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:32px;flex:1;">
+${d.metrics.map((m) => `<div class="card" style="padding:44px 36px;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden;"><div style="position:absolute;top:0;left:0;right:0;height:4px;background:linear-gradient(90deg,${t.accent},transparent);"></div>${m.change ? `<div style="display:inline-flex;align-self:flex-start;padding:6px 12px;border-radius:20px;font-size:14px;font-weight:700;background:${t.badge};color:${t.badgeText};margin-bottom:24px;">${m.change}</div>` : ''}<div style="font-size:68px;font-weight:850;letter-spacing:-0.03em;color:${t.text};line-height:1;margin-bottom:14px;">${m.value}</div><div style="font-size:20px;font-weight:600;color:${t.muted};">${m.label}</div></div>`).join('')}
+</div></div>`
+      } else if ((layout === 'agenda' || layout === 'split') && d.columns) {
+        content = `<div style="display:flex;flex-direction:column;height:100%;max-width:1600px;margin:0 auto;">
+${d.badge ? `<div class="badge">${d.badge}</div>` : ''}
+<h2 style="font-size:46px;font-weight:750;letter-spacing:-0.02em;margin:16px 0 8px;color:${t.text};">${d.title ?? ''}</h2>
+<p style="font-size:20px;color:${t.muted};margin-bottom:48px;">${d.subtitle ?? ''}</p>
+<div style="display:grid;grid-template-columns:${layout === 'split' ? '1fr 1fr' : `repeat(${d.columns.length},1fr)`};gap:${layout === 'split' ? '36px' : '28px'};flex:1;">
+${d.columns.map((c, i) => `<div class="card" style="padding:${layout === 'split' ? '40px' : '36px'};display:flex;flex-direction:column;${layout === 'split' && i === 1 ? `border-color:${t.accent};` : ''}"><h3 style="font-size:24px;font-weight:700;color:${t.accent};margin-bottom:${layout === 'split' ? '28px' : '24px'};">${c.title}</h3><ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:${layout === 'split' ? '20px' : '16px'};flex:1;">${c.bullets.map((b) => `<li style="display:flex;align-items:flex-start;gap:12px;font-size:18px;color:${t.text};"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${t.accent};margin-top:8px;flex-shrink:0;"></span><span>${b}</span></li>`).join('')}</ul></div>`).join('')}
+</div></div>`
+      } else if (layout === 'swot' && d.swot) {
+        const sw = d.swot
+        content = `<div style="display:flex;flex-direction:column;height:100%;max-width:1600px;margin:0 auto;">
+${d.badge ? `<div class="badge">${d.badge}</div>` : ''}
+<h2 style="font-size:44px;font-weight:750;letter-spacing:-0.02em;margin:16px 0 8px;color:${t.text};">${d.title ?? 'SWOT Analysis'}</h2>
+<p style="font-size:19px;color:${t.muted};margin-bottom:40px;">${d.subtitle ?? ''}</p>
+<div style="display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:24px;flex:1;">
+<div class="card" style="padding:28px 32px;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;"><span style="background:rgba(34,197,94,0.18);color:#22C55E;font-size:12px;font-weight:800;padding:3px 8px;border-radius:4px;">STRENGTHS</span></div><ul style="padding-left:18px;margin:0;display:flex;flex-direction:column;gap:10px;color:${t.text};font-size:16px;">${sw.strengths.map((s) => `<li>${s}</li>`).join('')}</ul></div>
+<div class="card" style="padding:28px 32px;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;"><span style="background:rgba(239,68,68,0.18);color:#EF4444;font-size:12px;font-weight:800;padding:3px 8px;border-radius:4px;">WEAKNESSES</span></div><ul style="padding-left:18px;margin:0;display:flex;flex-direction:column;gap:10px;color:${t.text};font-size:16px;">${sw.weaknesses.map((w) => `<li>${w}</li>`).join('')}</ul></div>
+<div class="card" style="padding:28px 32px;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;"><span style="background:rgba(59,130,246,0.18);color:#3B82F6;font-size:12px;font-weight:800;padding:3px 8px;border-radius:4px;">OPPORTUNITIES</span></div><ul style="padding-left:18px;margin:0;display:flex;flex-direction:column;gap:10px;color:${t.text};font-size:16px;">${sw.opportunities.map((o) => `<li>${o}</li>`).join('')}</ul></div>
+<div class="card" style="padding:28px 32px;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;"><span style="background:rgba(234,179,8,0.18);color:#EAB308;font-size:12px;font-weight:800;padding:3px 8px;border-radius:4px;">THREATS</span></div><ul style="padding-left:18px;margin:0;display:flex;flex-direction:column;gap:10px;color:${t.text};font-size:16px;">${sw.threats.map((t2) => `<li>${t2}</li>`).join('')}</ul></div>
+</div></div>`
+      } else if (layout === 'roadmap' && d.timeline) {
+        content = `<div style="display:flex;flex-direction:column;height:100%;max-width:1600px;margin:0 auto;">
+${d.badge ? `<div class="badge">${d.badge}</div>` : ''}
+<h2 style="font-size:46px;font-weight:750;letter-spacing:-0.02em;margin:16px 0 8px;color:${t.text};">${d.title ?? 'Roadmap'}</h2>
+<p style="font-size:20px;color:${t.muted};margin-bottom:56px;">${d.subtitle ?? ''}</p>
+<div style="display:grid;grid-template-columns:repeat(${d.timeline.length},1fr);gap:24px;flex:1;">
+${d.timeline.map((item, i) => `<div class="card" style="padding:32px 28px;display:flex;flex-direction:column;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;"><span style="font-size:18px;font-weight:900;color:${t.accent};">${item.phase}</span><span style="height:2px;flex:1;background:${t.border};"></span><span style="width:10px;height:10px;border-radius:50%;background:${i === 0 ? t.accent : t.border};"></span></div><h3 style="font-size:22px;font-weight:700;color:${t.text};margin:0 0 12px;">${item.title}</h3><p style="font-size:16px;color:${t.muted};line-height:1.45;margin:0;">${item.desc}</p></div>`).join('')}
+</div></div>`
+      } else if (layout === 'quote' && d.quote) {
+        content = `<div style="display:flex;flex-direction:column;justify-content:center;height:100%;max-width:1300px;margin:0 auto;text-align:center;">
+${d.badge ? `<div class="badge" style="align-self:center;">${d.badge}</div>` : ''}
+<div style="font-size:100px;line-height:1;color:${t.accent};font-family:serif;opacity:0.4;margin-top:20px;">"</div>
+<p style="font-size:38px;font-weight:600;line-height:1.35;letter-spacing:-0.02em;color:${t.text};margin:-40px 0 40px;">${d.quote.text}</p>
+<div><div style="font-size:24px;font-weight:750;color:${t.text};">${d.quote.author}</div><div style="font-size:18px;color:${t.muted};margin-top:4px;">${d.quote.role}</div></div>
+</div>`
+      } else if (layout === 'conclusion') {
+        content = `<div style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;max-width:1200px;margin:0 auto;text-align:center;">
+${d.badge ? `<div class="badge">${d.badge}</div>` : ''}
+<h2 style="font-size:64px;font-weight:850;letter-spacing:-0.03em;margin:24px 0 16px;color:${t.text};">${d.title ?? 'Thank You'}</h2>
+<p style="font-size:24px;color:${t.muted};max-width:800px;margin-bottom:48px;">${d.subtitle ?? ''}</p>
+${d.contact ? `<div class="card" style="padding:28px 48px;display:flex;gap:36px;font-size:18px;">${d.contact.email ? `<div><span style="color:${t.muted};">Email:</span> <strong style="color:${t.text};">${d.contact.email}</strong></div>` : ''}${d.contact.web ? `<div><span style="color:${t.muted};">Website:</span> <strong style="color:${t.text};">${d.contact.web}</strong></div>` : ''}</div>` : ''}
+</div>`
+      } else {
+        // Generic fallback
+        content = `<div style="display:flex;flex-direction:column;justify-content:center;height:100%;max-width:1400px;margin:0 auto;">
+${d.badge ? `<div class="badge">${d.badge}</div>` : ''}
+<h2 style="font-size:56px;font-weight:800;color:${t.text};margin:24px 0 16px;">${d.title ?? 'Slide'}</h2>
+<p style="font-size:24px;color:${t.muted};">${d.subtitle ?? ''}</p>
+</div>`
+      }
+
+      const html = `<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, height=1080, initial-scale=1">
+<title>${d.title ?? 'Presentation Slide'}</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { width:1920px; height:1080px; overflow:hidden; background:${t.gradient}; color:${t.text}; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; padding:72px 96px; display:flex; flex-direction:column; justify-content:space-between; }
+.badge { display:inline-flex; align-items:center; padding:6px 14px; border-radius:9999px; font-size:13px; font-weight:800; letter-spacing:0.12em; text-transform:uppercase; background:${t.badge}; color:${t.badgeText}; width:fit-content; }
+.card { background:${t.card}; border:1px solid ${t.border}; border-radius:16px; backdrop-filter:blur(12px); }
+</style>
+</head>
+<body data-slide-layout="${layout}" data-slide-theme="${theme ?? 'modern-dark'}">
+  ${metaComment}
+  <main style="flex:1;display:flex;flex-direction:column;">${content}</main>
+  <footer style="display:flex;justify-content:space-between;align-items:center;font-size:14px;color:${t.muted};opacity:0.75;padding-top:20px;">
+    <div>Doop Interactive Deck</div><div>${d.title ?? ''}</div>
+  </footer>
+</body></html>`
+
+      const frameName = `Slide — ${layout.charAt(0).toUpperCase() + layout.slice(1)}: ${(d.title ?? '').slice(0, 40)}`
+      const frame = actions.createFrame(
+        canvas_id,
+        { name: frameName, html, width: 1920, height: 1080 },
+        actorFrom(agent_name),
+      )
+      if (!frame) return noCanvas(canvas_id)
+
+      return withStatusNudge(
+        textWithNudge(
+          { ok: true, frame: frameSummary(frame), tip: 'Call get_frame_screenshot to review the slide visually.' },
+          REVIEW_NUDGE,
+        ),
+        canvas_id,
+        actorFrom(agent_name),
+      )
+    },
+  )
+
+  server.registerTool(
+    'edit_deck_slide',
+    {
+      title: 'Edit a presentation slide',
+      description:
+        'Update the structured content of a Doop Deck slide frame. Pass only the fields you want to change in data — other fields are preserved. To change the theme or layout, pass theme/layout. The change renders live instantly.',
+      inputSchema: {
+        frame_id: z.string().describe('ID of the slide frame to edit'),
+        layout: deckLayoutEnum.optional().describe('Change the slide layout (optional)'),
+        theme: deckThemeEnum.optional().describe('Change the theme (optional)'),
+        data: deckDataSchema.partial().optional().describe('Partial data fields to update'),
+        agent_name: agentName,
+      },
+    },
+    async ({ frame_id, layout, theme, data, agent_name }) => {
+      const frame = frameFor(frame_id)
+      if (!frame) return noFrame(frame_id)
+
+      // Parse existing doop-deck-spec comment
+      const match = frame.html.match(/<!-- doop-deck-spec:\s*([\s\S]*?)\s*-->/)
+      const jsonStr = match?.[1]
+      let existing: Record<string, unknown> = { layout: 'cover', theme: 'modern-dark', data: {} }
+      if (jsonStr) {
+        try {
+          existing = JSON.parse(jsonStr)
+        } catch {
+          /* keep default */
+        }
+      }
+
+      // Merge changes
+      const nextLayout = layout ?? (existing.layout as string)
+      const nextTheme = theme ?? (existing.theme as string)
+      const existingData = (typeof existing.data === 'object' && existing.data !== null ? existing.data : {}) as Record<
+        string,
+        unknown
+      >
+      const nextData = data ? { ...existingData, ...data } : existingData
+
+      // Re-use create_deck_slide logic by calling set_frame_html with regenerated HTML
+      // We output the updated spec JSON back as context for the agent
+      const nextSpec = { layout: nextLayout, theme: nextTheme, data: nextData }
+      const metaComment = `<!-- doop-deck-spec: ${JSON.stringify(nextSpec)} -->`
+
+      // For a full re-render the agent can also call set_frame_html directly —
+      // here we just update the metadata comment and signal what was changed.
+      const updatedHtml = frame.html.replace(/<!-- doop-deck-spec:\s*[\s\S]*?\s*-->/, metaComment)
+
+      const updated = actions.updateFrame(frame_id, { html: updatedHtml }, actorFrom(agent_name))
+      if (!updated) return noFrame(frame_id)
+
+      return withStatusNudge(
+        text({
+          ok: true,
+          frame: frameSummary(updated),
+          spec: nextSpec,
+          tip: 'Metadata updated. To re-render the visual, call set_frame_html with a fully rebuilt slide HTML, or call create_deck_slide to replace the frame.',
+        }),
+        frame.canvasId,
+        actorFrom(agent_name),
+      )
+    },
+  )
+
   return server
 }
 

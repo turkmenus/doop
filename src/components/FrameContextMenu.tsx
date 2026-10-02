@@ -40,7 +40,10 @@ export function FrameContextMenu({ frame, at }: { frame: Frame; at: MutableRefOb
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem
-        onSelect={() => navigator.clipboard.writeText(`${location.origin}/c/${frame.canvasId}?frame=${frame.id}`)}
+        onSelect={() => {
+          const prefix = location.pathname.startsWith('/d/') ? '/d/' : '/c/'
+          void navigator.clipboard.writeText(`${location.origin}${prefix}${frame.canvasId}?frame=${frame.id}`)
+        }}
       >
         Copy link
       </ContextMenuItem>

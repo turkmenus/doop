@@ -94,10 +94,10 @@ export function ensureTab(id: string, name?: string) {
 
 /** Open (or switch to) the tab for a canvas. False in plain browsers so
  *  callers fall back to a bare navigation. */
-export function openCanvasTab(id: string, name?: string): boolean {
+export function openCanvasTab(id: string, name?: string, pathPrefix: string = '/c'): boolean {
   if (!isDesktopShell()) return false
   ensureTab(id, name)
-  navigate(`/c/${id}`)
+  navigate(`${pathPrefix}/${id}`)
   return true
 }
 
@@ -117,9 +117,9 @@ export function closeTab(id: string, currentPath: string) {
   const next = tabs.filter((t) => t.id !== id)
   setTabs(next)
   /* closing the tab you're on lands you on its right neighbour, like Chrome */
-  if (currentPath === `/c/${id}`) {
+  if (currentPath === `/c/${id}` || currentPath === `/d/${id}`) {
     const neighbour = next[Math.min(at, next.length - 1)]
-    navigate(neighbour ? `/c/${neighbour.id}` : '/')
+    navigate(neighbour ? (currentPath.startsWith('/d/') ? `/d/${neighbour.id}` : `/c/${neighbour.id}`) : '/')
   }
 }
 
@@ -130,7 +130,9 @@ export function closeOtherTabs(id: string, currentPath: string) {
   const keep = useTabs.getState().tabs.find((t) => t.id === id)
   if (!keep) return
   setTabs([keep])
-  if (currentPath !== `/c/${id}`) navigate(`/c/${id}`)
+  if (currentPath !== `/c/${id}` && currentPath !== `/d/${id}`) {
+    navigate(currentPath.startsWith('/d/') ? `/d/${id}` : `/c/${id}`)
+  }
 }
 
 export function closeAllTabs() {

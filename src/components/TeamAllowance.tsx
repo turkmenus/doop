@@ -121,7 +121,7 @@ export function LimitWall({
             onClick={() => {
               posthog.capture('resident_limit_connect_clicked')
               /* carry the canvas so Settings can send them straight back */
-              navigate(`/settings?from=${encodeURIComponent(`/c/${canvasId}`)}`)
+              navigate(`/settings?from=${encodeURIComponent(`/d/${canvasId}`)}`)
             }}
           >
             Connect your subscription
