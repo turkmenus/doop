@@ -90,6 +90,7 @@ interface ChatToolCall {
   id: string
   type: 'function'
   function: { name: string; arguments: string }
+  thought_signature?: string
 }
 
 function toMessages(system: string, messages: Anthropic.MessageParam[], vision: boolean): ChatMessage[] {
@@ -109,10 +110,13 @@ function toMessages(system: string, messages: Anthropic.MessageParam[], vision: 
       for (const block of message.content) {
         if (block.type === 'text') texts.push(block.text)
         else if (block.type === 'tool_use') {
+          const rawBlock = block as { thought_signature?: string; thoughtSignature?: string }
+          const signature = rawBlock.thought_signature ?? rawBlock.thoughtSignature
           calls.push({
             id: block.id,
             type: 'function',
             function: { name: block.name, arguments: JSON.stringify(block.input ?? {}) },
+            ...(signature ? { thought_signature: signature } : {}),
           })
         }
       }
@@ -219,12 +223,20 @@ function fromCompletion(body: CompletionBody, label: string): TurnResult {
          validation then returns a usable error to the model */
       input = {}
     }
+    const rawCall = call as {
+      id?: string
+      function?: { name?: string; arguments?: string }
+      thought_signature?: string
+      thoughtSignature?: string
+    }
+    const signature = rawCall.thought_signature ?? rawCall.thoughtSignature
     content.push({
       type: 'tool_use',
       id: call.id || `call_${randomUUID()}`,
       name: call.function?.name || 'unknown',
       input: input as Record<string, unknown>,
-    })
+      ...(signature ? { thought_signature: signature } : {}),
+    } as TurnBlock)
   }
   const truncated = choice.finish_reason === 'length'
   const stop: StopReason = refused ? 'refusal' : toolCalls > 0 ? 'tool_use' : truncated ? 'max_tokens' : 'end_turn'

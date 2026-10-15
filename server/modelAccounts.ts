@@ -170,12 +170,19 @@ export function accountModelFor(account: Pick<ModelAccount, 'kind' | 'model'>): 
   return MODEL_POLICY[account.kind].resolve(account.model)
 }
 
+export function isVisionModel(model: string): boolean {
+  return /vision|vl|llava|minicpm-v|pixtral|bakllava/i.test(model)
+}
+
 /** Whether the model this account resolves to can see images. An id off the
  *  curated menu (a server env override) is trusted to have vision except on
  *  OpenRouter, whose roster mixes text-only models — there the conservative
  *  answer is a degraded run rather than a 400 on the first screenshot. */
 export function accountVisionFor(account: Pick<ModelAccount, 'kind' | 'model'>): boolean {
   const model = accountModelFor(account)
+  if (account.kind === 'ollama') {
+    return isVisionModel(model)
+  }
   const menu =
     account.kind === 'openrouter-key' ? OPENROUTER_MODELS : account.kind === 'gemini-key' ? GEMINI_MODELS : null
   if (!menu) return true

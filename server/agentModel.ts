@@ -3,7 +3,7 @@ import { geminiCloudRuns, geminiCloudWorkerFor } from './geminiCloudRuns.ts'
 import { localAgentRuns, type LocalHarnessRequest } from './localAgentRuns.ts'
 import type { LocalAgentResult } from '../shared/localAgent.ts'
 import Anthropic from '@anthropic-ai/sdk'
-import { getAccount, withFreshToken, accountModelFor, accountVisionFor } from './modelAccounts.ts'
+import { getAccount, withFreshToken, accountModelFor, accountVisionFor, isVisionModel } from './modelAccounts.ts'
 import type { AccountKind, ModelAccount } from './modelAccounts.ts'
 import { ModelAuthError, ModelUnavailableError, runAzureTurn, runOpenAiTurn } from './openaiAgent.ts'
 import { runOllamaTurn } from './ollamaAgent.ts'
@@ -166,10 +166,12 @@ function ollamaTier(): AgentModel | null {
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
   const model = process.env.OLLAMA_MODEL || process.env.DOOP_AGENT_MODEL || 'hermes3'
   const apiKey = process.env.OLLAMA_API_KEY || process.env.OPENAI_API_KEY
-  const config = { baseUrl, model, apiKey }
+  const vision = isVisionModel(model)
+  const config = { baseUrl, model, apiKey, vision }
   return {
     provider: 'ollama',
     label: `Doop (${model})`,
+    vision,
     async run(req) {
       try {
         return await runOllamaTurn(config, req)
@@ -272,16 +274,19 @@ function byoModel(account: ModelAccount): AgentModel {
       throw new ModelConfigurationError('Ollama / Custom endpoint Base URL is missing. Reconnect in Settings.')
     }
     const model = accountModelFor(account)
+    const vision = accountVisionFor(account)
     return {
       provider: account.kind,
       label: `Ollama (${model})`,
       userId: account.userId,
+      vision,
       run(req) {
         return runOllamaTurn(
           {
             baseUrl,
             model,
             apiKey: account.apiKey,
+            vision,
           },
           req,
         )

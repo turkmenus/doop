@@ -8,6 +8,7 @@ export interface OllamaConfig {
   baseUrl: string
   model: string
   apiKey?: string
+  vision?: boolean
 }
 
 function normalizeChatUrl(baseUrl: string): string {
@@ -28,7 +29,11 @@ function toOpenAiTools(tools: Anthropic.Tool[]) {
   }))
 }
 
-function toOpenAiMessages(system: { text: string }[], messages: Anthropic.MessageParam[]): unknown[] {
+function toOpenAiMessages(
+  system: { text: string }[],
+  messages: Anthropic.MessageParam[],
+  vision: boolean = true,
+): unknown[] {
   const openAiMessages: unknown[] = []
 
   const systemText = system
@@ -47,12 +52,19 @@ function toOpenAiMessages(system: { text: string }[], messages: Anthropic.Messag
 
     if (m.role === 'assistant') {
       let textContent = ''
-      const toolCalls: { id: string; type: 'function'; function: { name: string; arguments: string } }[] = []
+      const toolCalls: {
+        id: string
+        type: 'function'
+        function: { name: string; arguments: string }
+        thought_signature?: string
+      }[] = []
 
       for (const block of m.content) {
         if (block.type === 'text') {
           textContent += (textContent ? '\n' : '') + block.text
         } else if (block.type === 'tool_use') {
+          const rawBlock = block as { thought_signature?: string; thoughtSignature?: string }
+          const signature = rawBlock.thought_signature ?? rawBlock.thoughtSignature
           toolCalls.push({
             id: block.id,
             type: 'function',
@@ -60,6 +72,7 @@ function toOpenAiMessages(system: { text: string }[], messages: Anthropic.Messag
               name: block.name,
               arguments: JSON.stringify(block.input ?? {}),
             },
+            ...(signature ? { thought_signature: signature } : {}),
           })
         }
       }
@@ -79,6 +92,10 @@ function toOpenAiMessages(system: { text: string }[], messages: Anthropic.Messag
       if (block.type === 'text') {
         userParts.push({ type: 'text', text: block.text })
       } else if (block.type === 'image') {
+        if (!vision) {
+          userParts.push({ type: 'text', text: '[image omitted — the selected model cannot view images]' })
+          continue
+        }
         const src = block.source as { type?: string; media_type?: string; data?: string; url?: string }
         if (src.type === 'url' && src.url) {
           userParts.push({ type: 'image_url', image_url: { url: src.url } })
@@ -93,7 +110,15 @@ function toOpenAiMessages(system: { text: string }[], messages: Anthropic.Messag
         if (typeof block.content === 'string') {
           contentStr = block.content
         } else if (Array.isArray(block.content)) {
-          contentStr = block.content.map((p) => (p.type === 'text' ? p.text : '[image]')).join('\n')
+          contentStr = block.content
+            .map((p) =>
+              p.type === 'text'
+                ? p.text
+                : vision
+                  ? '[image returned]'
+                  : '[image omitted — the selected model cannot view images]',
+            )
+            .join('\n')
         }
         openAiMessages.push({
           role: 'tool',
@@ -137,7 +162,7 @@ export async function runOllamaTurn(config: OllamaConfig, req: AgentTurnRequest)
     headers['Authorization'] = `Bearer ${config.apiKey}`
   }
 
-  const messages = toOpenAiMessages(req.system, req.messages)
+  const messages = toOpenAiMessages(req.system, req.messages, config.vision)
   const tools = req.tools.length > 0 ? toOpenAiTools(req.tools) : undefined
 
   const body: Record<string, unknown> = {
@@ -190,12 +215,20 @@ export async function runOllamaTurn(config: OllamaConfig, req: AgentTurnRequest)
       } catch {
         input = {}
       }
+      const rawCall = tc as {
+        id?: string
+        function?: { name?: string; arguments?: string }
+        thought_signature?: string
+        thoughtSignature?: string
+      }
+      const signature = rawCall.thought_signature ?? rawCall.thoughtSignature
       content.push({
         type: 'tool_use',
         id: tc.id || `call_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
         name: tc.function.name,
         input,
-      })
+        ...(signature ? { thought_signature: signature } : {}),
+      } as TurnBlock)
     }
   }
 

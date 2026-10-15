@@ -70,6 +70,26 @@ describe('toMessages', () => {
     expect(out[3]).toEqual({ role: 'tool', tool_call_id: 'call_9', content: 'created' })
   })
 
+  it('preserves thought_signature on assistant tool_calls for Gemini', () => {
+    const messages: Anthropic.MessageParam[] = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'call_gemini',
+            name: 'set_status',
+            input: { status: 'Working' },
+            ...({ thought_signature: 'sig_12345' } as unknown as object),
+          },
+        ],
+      },
+    ]
+    const out = toMessages('sys', messages, true)
+    const assistant = out[1] as { role: string; tool_calls?: Array<{ thought_signature?: string }> }
+    expect(assistant.tool_calls?.[0]?.thought_signature).toBe('sig_12345')
+  })
+
   it('re-attaches tool-result images as a following user message', () => {
     const out = toMessages('sys', [toolResultWithImage()], true)
     const tool = out[1] as { role: string; content: string }
@@ -138,6 +158,34 @@ describe('fromCompletion', () => {
       id: 'call_1',
       name: 'create_frame',
       input: { name: 'Hero' },
+    })
+  })
+
+  it('preserves thought_signature on tool calls returned by Gemini', () => {
+    const res = fromCompletion(
+      {
+        choices: [
+          {
+            finish_reason: 'tool_calls',
+            message: {
+              tool_calls: [
+                {
+                  id: 'call_gemini_1',
+                  function: { name: 'set_status', arguments: '{"status":"Thinking"}' },
+                  ...({ thought_signature: 'sig_gemini_abc' } as unknown as object),
+                },
+              ],
+            },
+          },
+        ],
+      },
+      'Gemini',
+    )
+    expect(res.content[0]).toMatchObject({
+      type: 'tool_use',
+      id: 'call_gemini_1',
+      name: 'set_status',
+      thought_signature: 'sig_gemini_abc',
     })
   })
 
