@@ -6,8 +6,11 @@ services:
     build: .
     ports:
       - '4400:4400'
+    env_file:
+      - path: .env
+        required: false
     environment:
-      DATABASE_URL: postgres://doop:doop@db:5432/doop
+      DATABASE_URL: ${DATABASE_URL:-postgres://doop:doop@db:5432/doop}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-change-me-please-not-for-production}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:4400}
       SIGNUP_EMAIL_DOMAINS: ${SIGNUP_EMAIL_DOMAINS:-}
@@ -19,6 +22,8 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
+    volumes:
+      - doop-data:/app/data
     depends_on:
       db:
         condition: service_healthy
@@ -27,13 +32,13 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: doop
-      POSTGRES_PASSWORD: doop
-      POSTGRES_DB: doop
+      POSTGRES_USER: ${POSTGRES_USER:-doop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-doop}
+      POSTGRES_DB: ${POSTGRES_DB:-doop}
     volumes:
       - doop-pg:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U doop']
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER:-doop}']
       interval: 5s
       timeout: 3s
       retries: 10
@@ -41,3 +46,4 @@ services:
 
 volumes:
   doop-pg:
+  doop-data:

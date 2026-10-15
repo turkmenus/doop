@@ -51,6 +51,9 @@ COPY --from=build /app/dist ./dist
 COPY server ./server
 COPY shared ./shared
 
+RUN mkdir -p /app/data
+VOLUME ["/app/data"]
+
 EXPOSE 4400
 HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://localhost:'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # the installed binary rather than npx: npm is not what resolves packages here
