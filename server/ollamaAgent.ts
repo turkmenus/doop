@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { AgentTurnRequest, AgentTurnResult } from './agentModel.ts'
-import { ModelAuthError, ModelUnavailableError } from './openaiAgent.ts'
+import { IMAGE_NOTE, ModelAuthError, ModelUnavailableError, flattenToolResult } from './openaiAgent.ts'
+import { IMAGE_OMITTED_NOTE } from './chatCompletionsAgent.ts'
 import type { TurnBlock, StopReason } from './openaiAgent.ts'
 
 export interface OllamaConfig {
@@ -87,13 +88,14 @@ function toOpenAiMessages(
 
     // Role is 'user': could contain text, image, or tool_result blocks
     const userParts: unknown[] = []
+    const trailingImages: unknown[] = []
 
     for (const block of m.content) {
       if (block.type === 'text') {
         userParts.push({ type: 'text', text: block.text })
       } else if (block.type === 'image') {
         if (!vision) {
-          userParts.push({ type: 'text', text: '[image omitted — the selected model cannot view images]' })
+          userParts.push({ type: 'text', text: IMAGE_OMITTED_NOTE })
           continue
         }
         const src = block.source as { type?: string; media_type?: string; data?: string; url?: string }
@@ -106,35 +108,36 @@ function toOpenAiMessages(
           })
         }
       } else if (block.type === 'tool_result') {
-        let contentStr = ''
-        if (typeof block.content === 'string') {
-          contentStr = block.content
-        } else if (Array.isArray(block.content)) {
-          contentStr = block.content
-            .map((p) =>
-              p.type === 'text'
-                ? p.text
-                : vision
-                  ? '[image returned]'
-                  : '[image omitted — the selected model cannot view images]',
-            )
-            .join('\n')
-        }
+        const { text, images } = flattenToolResult(block)
         openAiMessages.push({
           role: 'tool',
           tool_call_id: block.tool_use_id,
-          content: block.is_error ? `Error: ${contentStr}` : contentStr || 'ok',
+          content: vision
+            ? text
+            : text.replaceAll('[image returned — see the attached image below]', IMAGE_OMITTED_NOTE),
         })
+        if (vision) {
+          for (const img of images) {
+            if (img.type === 'input_image') {
+              trailingImages.push({ type: 'image_url', image_url: { url: img.image_url } })
+            }
+          }
+        }
       }
     }
 
     if (userParts.length > 0) {
       openAiMessages.push({ role: 'user', content: userParts })
     }
+    if (trailingImages.length > 0) {
+      openAiMessages.push({ role: 'user', content: [...trailingImages, { type: 'text', text: IMAGE_NOTE }] })
+    }
   }
 
   return openAiMessages
 }
+
+export const _internal = { toOpenAiMessages, toOpenAiTools }
 
 interface OpenAiChatResponse {
   choices?: {

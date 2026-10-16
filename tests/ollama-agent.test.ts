@@ -223,4 +223,155 @@ describe('Ollama / OpenAI-Compatible Agent Provider', () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  it('re-attaches tool-result images as a following user message when vision is true', async () => {
+    let capturedBody: CapturedPayload | null = null
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string)
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: { role: 'assistant', content: 'Seen the screenshot.' },
+              finish_reason: 'stop',
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as typeof globalThis.fetch
+
+    try {
+      const turnReq: AgentTurnRequest = {
+        system: [{ text: 'System prompt' }],
+        tools: [],
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call_shot',
+                name: 'screenshot_frame',
+                input: { frame_id: 'f1' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_shot',
+                content: [
+                  { type: 'text', text: 'Screenshot of Card' },
+                  {
+                    type: 'image',
+                    source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUg==' },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        maxTokens: 1024,
+      }
+
+      await runOllamaTurn(
+        { baseUrl: 'http://localhost:11434/v1', model: 'kimi-k2.7-code:cloud', vision: true },
+        turnReq,
+      )
+
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody!
+      const toolMsg = body.messages.find((m: { role: string }) => m.role === 'tool')
+      expect(toolMsg?.content).toContain('[image returned — see the attached image below]')
+
+      const trailingUserMsg = body.messages[body.messages.length - 1]
+      expect(trailingUserMsg?.role).toBe('user')
+      expect(Array.isArray(trailingUserMsg?.content)).toBe(true)
+      const parts = trailingUserMsg?.content as Array<{ type: string; image_url?: { url: string }; text?: string }>
+      expect(parts[0]?.type).toBe('image_url')
+      expect(parts[0]?.image_url?.url).toContain('data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('omits images with text note when vision is false', async () => {
+    let capturedBody: CapturedPayload | null = null
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string)
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: { role: 'assistant', content: 'Understood.' },
+              finish_reason: 'stop',
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as typeof globalThis.fetch
+
+    try {
+      const turnReq: AgentTurnRequest = {
+        system: [{ text: 'System prompt' }],
+        tools: [],
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call_shot',
+                name: 'screenshot_frame',
+                input: { frame_id: 'f1' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_shot',
+                content: [
+                  { type: 'text', text: 'Screenshot of Card' },
+                  {
+                    type: 'image',
+                    source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUg==' },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        maxTokens: 1024,
+      }
+
+      await runOllamaTurn({ baseUrl: 'http://localhost:11434/v1', model: 'hermes3', vision: false }, turnReq)
+
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody!
+      const toolMsg = body.messages.find((m: { role: string }) => m.role === 'tool')
+      expect(toolMsg?.content).toContain('[image omitted — the selected model cannot view images]')
+
+      // When vision is false, no trailing user message with image_url should be added
+      const trailingUserMsg = body.messages.find(
+        (m: { role: string; content?: unknown }) =>
+          m.role === 'user' &&
+          Array.isArray(m.content) &&
+          m.content.some((c: { type: string }) => c.type === 'image_url'),
+      )
+      expect(trailingUserMsg).toBeUndefined()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
