@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/turkmenus/doop/compare/v0.5.0...desktop-v0.6.0) (2026-10-16)
+
+
+### Features
+
+* **agent:** add Claude CLI and API key providers ([#155](https://github.com/turkmenus/doop/issues/155)) ([4bed23d](https://github.com/turkmenus/doop/commit/4bed23da489bcb5345e483015c791b51ff30c81e))
+* **desktop:** add a drag-to-Applications background to the macOS DMG ([#225](https://github.com/turkmenus/doop/issues/225)) ([8f5ada5](https://github.com/turkmenus/doop/commit/8f5ada56e7cbfe81efae646bede81e8e8e50bbcb))
+
 ## [0.5.0](https://github.com/kgoedecke/doop/compare/desktop-v0.4.0...desktop-v0.5.0) (2026-10-13)
 
 
