@@ -25,7 +25,7 @@ import type { CanvasTab } from '../lib/desktop'
  */
 export function DesktopTabs({ path }: { path: string }) {
   const tabs = useTabs((s) => s.tabs)
-  const activeId = path.match(/^\/[cd]\/([^/]+)/)?.[1] ?? null
+  const activeId = path.match(/^\/c\/([^/]+)/)?.[1] ?? null
 
   /* deep links and back/forward can land on a canvas the strip never opened */
   useEffect(() => {
@@ -74,10 +74,8 @@ export function DesktopTabs({ path }: { path: string }) {
                     'group relative -mb-px flex h-[36px] min-w-[110px] max-w-[210px] flex-1 basis-[210px] cursor-default items-center gap-1 rounded-t-[9px] border border-b-0 border-transparent pb-[2px] pl-3 pr-1.5 text-[12.5px] text-ink-soft',
                     on ? 'border-line bg-surface text-ink' : 'transition-colors hover:bg-ink/[0.04]',
                   )}
-                  onClick={() => navigate(path.startsWith('/d/') ? `/d/${tab.id}` : `/c/${tab.id}`)}
-                  onKeyDown={(e) =>
-                    e.key === 'Enter' && navigate(path.startsWith('/d/') ? `/d/${tab.id}` : `/c/${tab.id}`)
-                  }
+                  onClick={() => navigate(`/c/${tab.id}`)}
+                  onKeyDown={(e) => e.key === 'Enter' && navigate(`/c/${tab.id}`)}
                   onAuxClick={(e) => e.button === 1 && closeTab(tab.id, path)}
                 >
                   <span className="min-w-0 flex-1 truncate">{tab.name}</span>
@@ -116,8 +114,8 @@ export function DesktopTabs({ path }: { path: string }) {
  *  set). Its content is portalled to the body, so it needs to clear the
  *  strip's own z-index to overlap it. */
 function TabContextMenu({ tab, path }: { tab: CanvasTab; path: string }) {
-  const url = `${location.origin}${path.startsWith('/d/') ? '/d/' : '/c/'}${tab.id}`
-  const on = path === `/c/${tab.id}` || path === `/d/${tab.id}`
+  const url = `${location.origin}/c/${tab.id}`
+  const on = path === `/c/${tab.id}`
   return (
     <ContextMenuContent className="z-[850]">
       <ContextMenuItem onSelect={() => navigator.clipboard.writeText(url)}>Copy link</ContextMenuItem>

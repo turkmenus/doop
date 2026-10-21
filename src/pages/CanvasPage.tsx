@@ -13,7 +13,7 @@ import {
 } from '../lib/api'
 import { navigate } from '../App'
 import { DoopMark } from '../components/Logo'
-import { BarDivider, TopBar, TopBarHome, TopBarTitle, barGhostBtn } from '../components/TopBar'
+import { BarDivider, TopBar, TopBarHome, TopBarTitle } from '../components/TopBar'
 import { ensureTab } from '../lib/desktop'
 import { Stage } from '../components/Stage'
 import { Board } from '../components/Board'
@@ -102,7 +102,7 @@ const STARTER_HTML = `<!doctype html>
 const importNoteCls = 'mt-2.5 text-[11.5px] leading-[1.4] text-ink-faint'
 const errorNoteCls = 'mt-2.5 text-[13px] text-accent-ink'
 
-export function CanvasPage({ canvasId, initialView }: { canvasId: string; initialView?: 'canvas' | 'board' }) {
+export function CanvasPage({ canvasId }: { canvasId: string }) {
   const canvas = useStore((s) => s.canvas)
   const connected = useStore((s) => s.connected)
   const presences = useStore((s) => s.presences)
@@ -110,12 +110,7 @@ export function CanvasPage({ canvasId, initialView }: { canvasId: string; initia
   const select = useStore((s) => s.select)
   const isMobile = useIsMobile()
   const [showActivity, setShowActivity] = useState(() => !window.matchMedia('(max-width: 900px)').matches)
-  const [view, setView] = useState<'canvas' | 'board'>(() => {
-    if (initialView) return initialView
-    const params = new URLSearchParams(location.search)
-    if (params.get('view') === 'board') return 'board'
-    return 'canvas'
-  })
+  const [view, setView] = useState<'canvas' | 'board'>('canvas')
   const [showConnect, setShowConnect] = useState(false)
   const [showShare, setShowShare] = useState(false)
   const [presenting, setPresenting] = useState(false)
@@ -337,15 +332,7 @@ export function CanvasPage({ canvasId, initialView }: { canvasId: string; initia
           className="shrink-0 max-xs:order-2"
           aria-label="View"
           value={view}
-          onValueChange={(next) => {
-            const nextView = next as 'canvas' | 'board'
-            setView(nextView)
-            if (nextView === 'board') {
-              history.replaceState(null, '', `/c/${canvasId}?view=board`)
-            } else {
-              history.replaceState(null, '', `/c/${canvasId}`)
-            }
-          }}
+          onValueChange={(next) => setView(next as 'canvas' | 'board')}
         >
           <SegmentedItem value="canvas">Canvas</SegmentedItem>
           <SegmentedItem value="board">Board</SegmentedItem>
@@ -373,11 +360,6 @@ export function CanvasPage({ canvasId, initialView }: { canvasId: string; initia
             <PeerAvatars others={others} />
           </div>
           <BarDivider />
-          <Tooltip label="Open in Deck presentation mode" side="bottom">
-            <Button variant="ghost" className={barGhostBtn} onClick={() => navigate(`/d/${canvasId}`)}>
-              Deck
-            </Button>
-          </Tooltip>
           <Tooltip label={selectedId ? 'Present this frame' : 'Select a frame to present'} side="bottom">
             <Button
               variant="ghost"

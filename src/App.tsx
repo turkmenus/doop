@@ -4,7 +4,6 @@ import { Home } from './pages/Home'
 import { Community } from './pages/Community'
 import { Settings } from './pages/Settings'
 import { CanvasPage } from './pages/CanvasPage'
-import { DeckPage } from './pages/DeckPage'
 import { AuthPage } from './pages/AuthPage'
 import { DesktopHandoff } from './pages/DesktopHandoff'
 import { DesktopSignIn } from './pages/DesktopSignIn'
@@ -137,18 +136,13 @@ export function App() {
      session back and reloads. */
   if (path.startsWith('/admin') && (!me || returningToAdmin)) return <div className="auth-page" />
 
-  const deckMatch = path.match(/^\/d\/([^/?#]+)/) || path.match(/^\/c\/([^/?#]+)\/deck/)
   const canvasMatch = path.match(/^\/c\/([^/?#]+)/)
-  const page = deckMatch?.[1] ? (
-    <DeckPage canvasId={deckMatch[1]} key={`deck-${deckMatch[1]}`} />
-  ) : canvasMatch?.[1] ? (
+  const page = canvasMatch?.[1] ? (
     <CanvasPage canvasId={canvasMatch[1]} key={canvasMatch[1]} />
   ) : path === DESKTOP_HANDOFF_PATH ? (
     <DesktopHandoff />
   ) : path.startsWith('/admin') ? (
     <Admin />
-  ) : path.startsWith('/decks') ? (
-    <Home initialScope="decks" />
   ) : path.startsWith('/settings') ? (
     <Settings />
   ) : path.startsWith('/community') ? (
