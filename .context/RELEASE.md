@@ -11,7 +11,10 @@ per package, driven by conventional commits (`release-please-config.json`,
   or deployed from it.
 - `desktop/` -> "chore(desktop): release x.y.z" bumps `desktop/package.json`,
   `src-tauri/tauri.conf.json`, `Cargo.toml`, `Cargo.lock` + `desktop/CHANGELOG.md`. It does NOT
-  tag: the `desktop-v*` tag is pushed by hand after merging (next section).
+  tag: the `desktop-v*` tag is pushed by hand after merging (next section). Since no GitHub
+  Release is cut, the workflow's last step flips the merged desktop PR's label from
+  `autorelease: pending` to `autorelease: tagged` itself; a merged PR left `pending` makes every
+  later run abort with "untagged, merged release PRs outstanding".
 
 Both packages are 0.x, so breaking changes bump the minor, not the major. With the default
 `GITHUB_TOKEN` the release PR gets no CI run; a `RELEASE_PLEASE_TOKEN` PAT secret fixes that.

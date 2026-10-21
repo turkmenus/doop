@@ -1,3 +1,4 @@
+import { env } from './env.ts'
 import { getLocalAgentPreference } from './localAgentPreferences.ts'
 import { geminiCloudWorkerFor } from './geminiCloudRuns.ts'
 import { eq, sql } from 'drizzle-orm'
@@ -26,11 +27,11 @@ import type { AccountKind } from './modelAccounts.ts'
  */
 
 export function activeServerProvider(): 'ollama' | 'anthropic' | 'azure' | null {
-  if (process.env.DOOP_AGENT_PROVIDER === 'ollama' || process.env.OLLAMA_BASE_URL || process.env.OLLAMA_MODEL) {
+  if (env.DOOP_AGENT_PROVIDER === 'ollama' || env.OLLAMA_BASE_URL || env.OLLAMA_MODEL) {
     return 'ollama'
   }
-  if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
-  if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_DEPLOYMENT && process.env.AZURE_OPENAI_API_KEY) {
+  if (env.ANTHROPIC_API_KEY) return 'anthropic'
+  if (env.AZURE_OPENAI_ENDPOINT && env.AZURE_OPENAI_DEPLOYMENT && env.AZURE_OPENAI_API_KEY) {
     return 'azure'
   }
   return null
@@ -38,10 +39,7 @@ export function activeServerProvider(): 'ollama' | 'anthropic' | 'azure' | null 
 
 const hasServerProvider = Boolean(activeServerProvider())
 
-export const RESIDENT_TASK_LIMIT = Math.max(
-  0,
-  Number(process.env.RESIDENT_TASK_LIMIT ?? (hasServerProvider ? 1000 : 0)),
-)
+export const RESIDENT_TASK_LIMIT = env.RESIDENT_TASK_LIMIT > 0 ? env.RESIDENT_TASK_LIMIT : hasServerProvider ? 1000 : 0
 
 export interface Allowance {
   used: number
@@ -90,8 +88,7 @@ export async function getAllowance(userId: string): Promise<Allowance> {
     getLocalAgentPreference(userId),
   ])
   const sProvider = activeServerProvider()
-  const sModel =
-    sProvider === 'ollama' ? process.env.OLLAMA_MODEL || process.env.DOOP_AGENT_MODEL || 'hermes3' : undefined
+  const sModel = sProvider === 'ollama' ? env.OLLAMA_MODEL || env.DOOP_AGENT_MODEL || 'hermes3' : undefined
   return {
     used,
     limit: RESIDENT_TASK_LIMIT,

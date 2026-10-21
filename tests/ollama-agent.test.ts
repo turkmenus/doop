@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { runOllamaTurn } from '../server/ollamaAgent.ts'
 import { pickModel, serverTierInfo } from '../server/agentModel.ts'
 import { activeServerProvider } from '../server/allowance.ts'
 import type { AgentTurnRequest } from '../server/agentModel.ts'
+import { stubEnv, unstubAllEnvs } from './envStub.ts'
 
 interface CapturedPayload {
   model: string
@@ -16,43 +17,27 @@ interface CapturedPayload {
 }
 
 describe('Ollama / OpenAI-Compatible Agent Provider', () => {
+  afterEach(unstubAllEnvs)
+
   it('detects ollama provider when env vars are configured', () => {
-    const originalProvider = process.env.DOOP_AGENT_PROVIDER
-    const originalUrl = process.env.OLLAMA_BASE_URL
-    const originalModel = process.env.OLLAMA_MODEL
+    stubEnv('DOOP_AGENT_PROVIDER', 'ollama')
+    stubEnv('OLLAMA_BASE_URL', 'https://ollama.example.com/v1')
+    stubEnv('OLLAMA_MODEL', 'hermes3')
 
-    try {
-      process.env.DOOP_AGENT_PROVIDER = 'ollama'
-      process.env.OLLAMA_BASE_URL = 'https://ollama.example.com/v1'
-      process.env.OLLAMA_MODEL = 'hermes3'
-
-      expect(activeServerProvider()).toBe('ollama')
-      const info = serverTierInfo()
-      expect(info.provider).toBe('ollama')
-      expect(info.ready).toBe(true)
-    } finally {
-      process.env.DOOP_AGENT_PROVIDER = originalProvider
-      process.env.OLLAMA_BASE_URL = originalUrl
-      process.env.OLLAMA_MODEL = originalModel
-    }
+    expect(activeServerProvider()).toBe('ollama')
+    const info = serverTierInfo()
+    expect(info.provider).toBe('ollama')
+    expect(info.ready).toBe(true)
   })
 
   it('resolves AgentModel correctly for Ollama', async () => {
-    const originalProvider = process.env.DOOP_AGENT_PROVIDER
-    const originalModel = process.env.OLLAMA_MODEL
+    stubEnv('DOOP_AGENT_PROVIDER', 'ollama')
+    stubEnv('OLLAMA_MODEL', 'qwen2.5-coder')
 
-    try {
-      process.env.DOOP_AGENT_PROVIDER = 'ollama'
-      process.env.OLLAMA_MODEL = 'qwen2.5-coder'
-
-      const model = await pickModel()
-      expect(model).not.toBeNull()
-      expect(model?.provider).toBe('ollama')
-      expect(model?.label).toBe('Doop (qwen2.5-coder)')
-    } finally {
-      process.env.DOOP_AGENT_PROVIDER = originalProvider
-      process.env.OLLAMA_MODEL = originalModel
-    }
+    const model = await pickModel()
+    expect(model).not.toBeNull()
+    expect(model?.provider).toBe('ollama')
+    expect(model?.label).toBe('Doop (qwen2.5-coder)')
   })
 
   it('correctly executes a turn and parses text and tool_calls from OpenAI-compatible response', async () => {
