@@ -1,25 +1,99 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useStore } from '../lib/store'
+import { useStore, type Viewport } from '../lib/store'
+import type { Frame } from '../../shared/types'
 import { usePageCanvas, currentPageCanvas } from '../lib/pages'
 import { sendWs } from '../lib/ws'
 import { throttle } from '../lib/throttle'
-import { FrameView } from './FrameView'
+import { FrameView, HiddenFrameView } from './FrameView'
+import { CanvasComments, type CanvasComposeAt } from './CanvasComments'
+import { placeComposer } from '../lib/composerPlacement'
+import { isCanvasComment, type CanvasComment } from '../../shared/comments'
+import { canvasPages } from '../../shared/pages'
 import { FlowOverlay } from './FlowOverlay'
 import { GhostFrames } from './GhostFrames'
 import { Cursors } from './Cursors'
 import { FollowFrame } from './FollowFrame'
 import { cameraOnCursor, cameraToFollow } from '../lib/follow'
 import { SnapGuides } from './SnapGuides'
-import { MOD_KEY } from '../lib/keys'
+import { isTypingTarget, MOD_KEY } from '../lib/keys'
 import { cn } from '../lib/utils'
 import { gesture } from '../lib/gesture'
 import { hasFrameClip, pasteFrameAtScreen } from '../lib/frameClipboard'
 import { MenuHint } from './ui/menu'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from './ui/context-menu'
-import { Toolbar, ToolbarButton, ToolbarDivider, ToolbarValue } from './ui/toolbar'
+import { Toolbar, ToolbarButton, ToolbarHighlight } from './ui/toolbar'
+import { ZoomControls } from './ZoomControls'
+import { Tooltip } from './ui/tooltip'
+import { BoxIcon, CircleIcon, CommentIcon, CursorIcon, FrameIcon, HandIcon, TextIcon, VectorIcon } from './ui/icons'
+import { TOOLS, isDrawingTool, resolvePointerAction, toolForKey, type Tool } from '../lib/tools'
+import { useCanvasDrawing } from './CanvasDrawing'
+import { FrameLabelLayer } from './FrameLabelLayer'
+import { layoutZoomFor } from '../lib/layoutZoom'
 
 const MIN_ZOOM = 0.08
-const MAX_ZOOM = 3
+/* The settled world is laid out at up to this zoom too (layoutZoomFor), so
+   the desktop app stays sharp all the way in. That costs little: WebKit and
+   Chromium both tile what is on screen, so backing memory follows the
+   viewport rather than the zoom, and frame documents never re-lay out (each
+   iframe undoes the zoom). Mirrored by FOLLOW_MAX_ZOOM. */
+const MAX_ZOOM = 16
+
+/* The Comment tool's cursor wins over everything under the stage — frames
+   included, like the Hand tool's grab — except inside the comment UI itself
+   (pins, composer, threads: `data-comment-ui`), which keeps its own cursors. */
+const COMMENT_CURSOR = 'cursor-comment! [&_:not([data-comment-ui]_*)]:cursor-comment!'
+
+/* The world is laid out at CSS zoom k, the settled camera zoom, and its
+   transform carries only what the camera has moved since. WebKit rasterizes a
+   composited layer at its CSS size and stretches it under a scale transform,
+   so a world scaled by its transform alone went soft in the desktop app past
+   100%. The element's own zoom also scales its translate, hence the /k. */
+function worldTransform(vp: Viewport, k: number): string {
+  return `translate(${vp.x / k}px, ${vp.y / k}px) scale(${vp.zoom / k})`
+}
+
+/* The pixel grid, as Figma draws it zoomed in: a hairline on every design-px
+   boundary. Below PIXEL_GRID_FROM the cells are too small to read as anything
+   but a tint, so it fades in from there and is fully on at PIXEL_GRID_FULL. */
+const PIXEL_GRID_FROM = 3
+const PIXEL_GRID_FULL = 5
+
+function pixelGridOpacity(zoom: number): number {
+  return Math.min(1, Math.max(0, (zoom - PIXEL_GRID_FROM) / (PIXEL_GRID_FULL - PIXEL_GRID_FROM)))
+}
+
+/** The canvas-pinned root comment a ?comment= link names, if it is loaded. */
+function linkedCanvasComment(id: string | null): CanvasComment | null {
+  if (!id) return null
+  const c = useStore.getState().comments.find((x) => x.id === id)
+  return c && isCanvasComment(c) && !c.parentId ? c : null
+}
+
+/* zoom to an absolute level pivoting on the view center — the world point in
+   the middle of the stage stays in the middle */
+function zoomCentered(el: HTMLElement, next: number) {
+  const cx = el.clientWidth / 2
+  const cy = el.clientHeight / 2
+  const vp = useStore.getState().viewport
+  const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next))
+  const scale = zoom / vp.zoom
+  useStore.getState().setViewport({
+    x: cx - (cx - vp.x) * scale,
+    y: cy - (cy - vp.y) * scale,
+    zoom,
+  })
+}
+
+const TOOL_ICONS: Record<Tool, React.ReactNode> = {
+  select: <CursorIcon />,
+  hand: <HandIcon />,
+  comment: <CommentIcon />,
+  rectangle: <BoxIcon />,
+  circle: <CircleIcon />,
+  path: <VectorIcon />,
+  text: <TextIcon />,
+  frame: <FrameIcon />,
+}
 
 const sendCursor = throttle((x: number, y: number) => sendWs({ type: 'cursor', x, y }), 50)
 /* the camera is shared so others can follow it — same cadence as the cursor */
@@ -37,44 +111,93 @@ const sendViewport = throttle(
   50,
 )
 
-export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
+export function Stage({
+  onAddFrame,
+  rightInset,
+}: {
+  onAddFrame: () => void
+  /** px the floating panels and islands cover at the stage's right edge —
+   *  no room there for a comment composer */
+  rightInset: number
+}) {
   const ref = useRef<HTMLDivElement>(null)
+  const drawing = useCanvasDrawing(ref)
   const worldRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
+  const pixelGridRef = useRef<HTMLDivElement>(null)
+  const [labelLayer, setLabelLayer] = useState<HTMLDivElement | null>(null)
   const zoomLabelRef = useRef<HTMLSpanElement>(null)
   const setViewport = useStore((s) => s.setViewport)
   const canvas = usePageCanvas()
   const activePageId = useStore((s) => s.activePageId)
   const select = useStore((s) => s.select)
   const panMode = useStore((s) => s.panMode)
+  /* ⌘. — the tool pill and the zoom pill go with the rest of the chrome */
+  const uiHidden = useStore((s) => s.uiHidden)
+  const tool = useStore((s) => s.tool)
+  const setTool = useStore((s) => s.setTool)
   const [panning, setPanning] = useState(false)
   /* the selection rectangle being dragged out, in world coordinates */
   const [marquee, setMarquee] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+  /* where the Comment tool was clicked on empty canvas: the composer opens there */
+  const [composeAt, setComposeAt] = useState<CanvasComposeAt | null>(null)
+  const dismissCompose = useCallback(() => setComposeAt(null), [])
   /* where the background menu opened, so Paste drops the frame there */
   const bgAt = useRef({ x: 0, y: 0 })
-  /* iframe oversampling factor — bumped only once the zoom settles */
-  const [raster, setRaster] = useState(1)
+  /* the world's layout zoom (see worldTransform) — caught up with the camera
+     only once the zoom settles, and never below 1, where scaling down a 1×
+     raster stays sharp and nothing needs a relayout; the ref serves the
+     per-frame viewport writes */
+  const [layoutZoom, setLayoutZoom] = useState(1)
+  const layoutZoomRef = useRef(1)
   const fitted = useRef(false)
   const deepLinkHandled = useRef(false)
   const focusedPage = useRef<string | null>(null)
+  const [linkSearch, setLinkSearch] = useState(location.search)
+
+  useEffect(() => {
+    function onPop() {
+      fitted.current = false
+      deepLinkHandled.current = false
+      focusedPage.current = null
+      setLinkSearch(location.search)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
 
   /* Viewport → DOM without React: no component subscribes to the viewport, so
      pan/zoom never renders anything. A store subscription writes the world
      transform, the grid layer, the --zoom variable (which counter-scales
-     labels/pins/cursors from CSS), and the toolbar % directly. */
+     labels/pins/cursors from CSS), and the zoom pill's % directly. */
   useLayoutEffect(() => {
     function apply(vp: { x: number; y: number; zoom: number }) {
       const world = worldRef.current
       const grid = gridRef.current
       const stage = ref.current
       if (!world || !grid || !stage) return
-      world.style.transform = `translate(${vp.x}px, ${vp.y}px) scale(${vp.zoom})`
+      world.style.transform = worldTransform(vp, layoutZoomRef.current)
       stage.style.setProperty('--zoom', String(vp.zoom))
+      /* the camera's offset, for chrome drawn in screen px (FrameLabelLayer) */
+      stage.style.setProperty('--vx', `${vp.x}px`)
+      stage.style.setProperty('--vy', `${vp.y}px`)
       const period = 26 * vp.zoom
       grid.style.backgroundSize = `${period}px ${period}px`
+      /* one period of overhang: the layer slides back by up to a period */
+      grid.style.width = grid.style.height = `calc(100% + ${period}px)`
       const gx = (((vp.x % period) + period) % period) - period
       const gy = (((vp.y % period) + period) % period) - period
       grid.style.transform = `translate(${gx}px, ${gy}px)`
+      const pixels = pixelGridRef.current
+      if (pixels) {
+        const opacity = pixelGridOpacity(vp.zoom)
+        pixels.hidden = opacity === 0
+        pixels.style.opacity = String(opacity)
+        pixels.style.backgroundSize = `${vp.zoom}px ${vp.zoom}px`
+        const px = (((vp.x % vp.zoom) + vp.zoom) % vp.zoom) - vp.zoom
+        const py = (((vp.y % vp.zoom) + vp.zoom) % vp.zoom) - vp.zoom
+        pixels.style.transform = `translate(${px}px, ${py}px)`
+      }
       if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(vp.zoom * 100)}%`
     }
     apply(useStore.getState().viewport)
@@ -88,8 +211,7 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
       if (ref.current) sendViewport(s.viewport, ref.current)
       window.clearTimeout(settle)
       settle = window.setTimeout(() => {
-        const z = useStore.getState().viewport.zoom
-        setRaster(z <= 1 ? 1 : Math.min(3, Math.ceil(z * 2) / 2))
+        setLayoutZoom(layoutZoomFor(useStore.getState().viewport.zoom, MAX_ZOOM))
       }, 250)
     })
     return () => {
@@ -97,6 +219,23 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
       window.clearTimeout(settle)
     }
   }, [])
+
+  /* a new layout zoom lands in the same commit as the frames' counter-zoom
+     (FrameView), so no paint sees one without the other */
+  useLayoutEffect(() => {
+    layoutZoomRef.current = layoutZoom
+    const world = worldRef.current
+    if (!world) return
+    /* a new zoom recomputes every length inside the world: anything with a
+       transition (a peer's cursor glides between positions) would animate
+       from its old-zoom value while the world itself snaps, so it jumped
+       off its spot and slid back. Transitions are off for this one change. */
+    world.dataset.rezoom = ''
+    world.style.zoom = String(layoutZoom)
+    world.style.transform = worldTransform(useStore.getState().viewport, layoutZoom)
+    void world.offsetWidth
+    delete world.dataset.rezoom
+  }, [layoutZoom])
 
   /* following a peer: whenever their camera (or, lacking one, their cursor)
      moves, ease ours toward the same view. Writes go through
@@ -222,7 +361,7 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
 
   /* center one frame in the viewport and select it (shared frame links) */
   const focusFrame = useCallback(
-    (f: { id: string; x: number; y: number; width: number; height: number }) => {
+    (f: Frame, selector: string | null) => {
       const el = ref.current
       if (!el) return
       select(f.id)
@@ -237,56 +376,115 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
         y: (el.clientHeight - f.height * zoom) / 2 - f.y * zoom,
         zoom,
       })
-      /* a shared frame link asks for this exact frame — show its details too */
-      useStore.getState().setInspectorOpen(true)
+      const s = useStore.getState()
+      s.pickElement(null)
+      if (selector) {
+        /* FrameView resolves this in the ready iframe: scripts can add or
+           remove elements that differ from the saved HTML. */
+        s.setTool('select')
+        s.setInspectorOpen(false)
+        s.pickElement({ frameId: f.id, selector })
+      } else {
+        s.setInspectorOpen(true)
+      }
     },
     [setViewport, select],
   )
 
+  /* centre a canvas comment's pin at 100% on its page and open its thread
+     (the link in a comment email) */
+  const focusPoint = useCallback(
+    (c: CanvasComment) => {
+      const el = ref.current
+      if (!el) return
+      const s = useStore.getState()
+      focusedPage.current = c.pageId
+      s.setActivePage(c.pageId)
+      setViewport({ x: el.clientWidth / 2 - c.x, y: el.clientHeight / 2 - c.y, zoom: 1 })
+      s.requestOpenThread(c.id)
+    },
+    [setViewport],
+  )
+
+  /* fit a set of frames (with their name labels above) into the view; an
+     empty set resets to the origin at 100% */
+  const fitFrames = useCallback(
+    (frames: { x: number; y: number; width: number; height: number }[]) => {
+      const el = ref.current
+      if (!el) return
+      const boxes = frames.map((f) => ({ x: f.x, y: f.y - 30, w: f.width, h: f.height + 30 }))
+      if (!boxes.length) {
+        setViewport({ x: 80, y: 80, zoom: 1 })
+        return
+      }
+      const minX = Math.min(...boxes.map((b) => b.x))
+      const minY = Math.min(...boxes.map((b) => b.y))
+      const maxX = Math.max(...boxes.map((b) => b.x + b.w))
+      const maxY = Math.max(...boxes.map((b) => b.y + b.h))
+      const pad = 80
+      const w = el.clientWidth
+      const h = el.clientHeight
+      const zoom = Math.min(
+        MAX_ZOOM,
+        Math.max(MIN_ZOOM, Math.min((w - pad * 2) / (maxX - minX), (h - pad * 2) / (maxY - minY), 1.25)),
+      )
+      setViewport({
+        x: (w - (maxX - minX) * zoom) / 2 - minX * zoom,
+        y: (h - (maxY - minY) * zoom) / 2 - minY * zoom,
+        zoom,
+      })
+    },
+    [setViewport],
+  )
+
   const fit = useCallback(() => {
-    const el = ref.current
     const c = currentPageCanvas()
-    if (!el || !c) return
-    const boxes = c.frames.map((f) => ({ x: f.x, y: f.y - 30, w: f.width, h: f.height + 30 }))
-    if (!boxes.length) {
-      setViewport({ x: 80, y: 80, zoom: 1 })
-      return
-    }
-    const minX = Math.min(...boxes.map((b) => b.x))
-    const minY = Math.min(...boxes.map((b) => b.y))
-    const maxX = Math.max(...boxes.map((b) => b.x + b.w))
-    const maxY = Math.max(...boxes.map((b) => b.y + b.h))
-    const pad = 80
-    const w = el.clientWidth
-    const h = el.clientHeight
-    const zoom = Math.min(
-      MAX_ZOOM,
-      Math.max(MIN_ZOOM, Math.min((w - pad * 2) / (maxX - minX), (h - pad * 2) / (maxY - minY), 1.25)),
-    )
-    setViewport({
-      x: (w - (maxX - minX) * zoom) / 2 - minX * zoom,
-      y: (h - (maxY - minY) * zoom) / 2 - minY * zoom,
-      zoom,
-    })
-  }, [setViewport])
+    if (c) fitFrames(c.frames)
+  }, [fitFrames])
+
+  /* zoom to the selected frames — with nothing selected there is nothing to
+     fit, so the view stays put */
+  const fitSelection = useCallback(() => {
+    const { selectedIds } = useStore.getState()
+    const frames = currentPageCanvas()?.frames.filter((f) => selectedIds.includes(f.id)) ?? []
+    if (frames.length) fitFrames(frames)
+  }, [fitFrames])
 
   useEffect(() => {
     fitted.current = focusedPage.current === activePageId
     focusedPage.current = null
   }, [activePageId])
 
-  /* zoom-to-fit once the canvas arrives — unless the URL deep-links a frame */
+  /* zoom-to-fit once the canvas arrives — unless the URL deep-links a frame,
+     a comment pinned to the canvas, or a page */
   useEffect(() => {
     if (!canvas || fitted.current) return
     fitted.current = true
     if (useStore.getState().following) return
-    const focusId = deepLinkHandled.current ? null : new URLSearchParams(location.search).get('frame')
+    const params = deepLinkHandled.current ? null : new URLSearchParams(linkSearch)
+    const focusId = params?.get('frame')
     const target = focusId ? useStore.getState().canvas?.frames.find((f) => f.id === focusId) : null
     if (target) {
       deepLinkHandled.current = true
-      focusFrame(target)
-    } else fit()
-  }, [canvas, activePageId, fit, focusFrame])
+      focusFrame(target, params?.get('selector') ?? null)
+      return
+    }
+    const pinned = params ? linkedCanvasComment(params.get('comment')) : null
+    if (pinned) {
+      deepLinkHandled.current = true
+      focusPoint(pinned)
+      return
+    }
+    const page = params?.get('page')
+    const whole = useStore.getState().canvas
+    if (page && whole && page !== activePageId && canvasPages(whole).some((p) => p.id === page)) {
+      /* the page switch re-runs this effect, which then fits that page */
+      deepLinkHandled.current = true
+      useStore.getState().setActivePage(page)
+      return
+    }
+    fit()
+  }, [canvas, activePageId, fit, focusFrame, focusPoint, linkSearch])
 
   /* wheel: pan / pinch-zoom — needs a non-passive listener. Trackpads fire
      wheel events faster than the display refreshes, so deltas accumulate and
@@ -415,38 +613,35 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
   }, [])
 
   /* ⌘0 → 100%, ⌘+ / ⌘− → step zoom, all pivoting on the view center —
-     preventDefault keeps the browser's own page zoom out of it */
+     preventDefault keeps the browser's own page zoom out of it. ⇧1 / ⇧2 fit
+     everything / the selection, as in Figma. */
   useEffect(() => {
-    function zoomTo(next: number) {
-      const el = ref.current
-      if (!el) return
-      const cx = el.clientWidth / 2
-      const cy = el.clientHeight / 2
-      const vp = useStore.getState().viewport
-      const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next))
-      const scale = zoom / vp.zoom
-      useStore.getState().setViewport({
-        x: cx - (cx - vp.x) * scale,
-        y: cy - (cy - vp.y) * scale,
-        zoom,
-      })
-    }
     function onKey(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
       const t = e.target as HTMLElement
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      if (e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        /* by code: ⇧1 types '!' on most layouts, so the key name is no use */
+        if (e.code !== 'Digit1' && e.code !== 'Digit2') return
+        e.preventDefault()
+        if (e.code === 'Digit1') fit()
+        else fitSelection()
+        return
+      }
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
       if (e.key !== '0' && e.key !== '=' && e.key !== '+' && e.key !== '-') return
       /* '+' arrives as ⇧= on most layouts; any other shifted combo isn't ours */
       if (e.shiftKey && e.key !== '+') return
+      const el = ref.current
+      if (!el) return
       e.preventDefault()
       const zoom = useStore.getState().viewport.zoom
-      if (e.key === '0') zoomTo(1)
-      else if (e.key === '-') zoomTo(zoom / 1.25)
-      else zoomTo(zoom * 1.25)
+      if (e.key === '0') zoomCentered(el, 1)
+      else if (e.key === '-') zoomCentered(el, zoom / 1.25)
+      else zoomCentered(el, zoom * 1.25)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [fit, fitSelection])
 
   function toWorld(clientX: number, clientY: number) {
     const rect = ref.current!.getBoundingClientRect()
@@ -485,16 +680,72 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
     }
   }, [])
 
+  /* Bare shortcut keys pick a tool, Esc returns to Select — bare keys
+     only (no modifiers), and never while typing in a field. Esc is the one
+     exception for canvas composers: it drops their draft and returns to Select.
+     Other fields keep Escape for their own editing behavior. */
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.repeat) return
+      if (e.key === 'Escape') {
+        if (isTypingTarget(e.target) && !e.target.closest('[data-comment-ui], [data-drawing-input]')) return
+        if (useStore.getState().tool !== 'select') useStore.getState().setTool('select')
+        return
+      }
+      if (isTypingTarget(e.target)) return
+      const next = toolForKey(e.key)
+      if (!next) return
+      e.preventDefault()
+      useStore.getState().setTool(next)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   function onPointerDown(e: React.PointerEvent) {
-    const isBackground = e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('world')
-    /* pan: middle mouse anywhere, space-drag anywhere, or a finger on the
-       background (touch has no space bar, and one-finger pan is how phones
-       move around) */
-    const pan = e.button === 1 || (e.button === 0 && (useStore.getState().panMode || e.pointerType === 'touch'))
-    if (pan) return startPan(e, isBackground)
-    /* left drag on the background draws a selection marquee */
-    if (e.button !== 0 || !isBackground) return
-    startMarquee(e)
+    const target = e.target as HTMLElement
+    /* a locked frame lets the press through (FrameView.startDrag), and the
+       stage treats it as empty canvas: a click clears, a drag marquees */
+    const isBackground =
+      e.target === e.currentTarget || target.classList.contains('world') || !!target.closest('[data-frame-locked]')
+    const s = useStore.getState()
+    const action = resolvePointerAction({
+      tool: s.tool,
+      target: isBackground ? 'background' : 'frame',
+      button: e.button,
+      pointerType: e.pointerType,
+      spaceHeld: s.panMode,
+    })
+    /* a press on a frame only reaches the stage when the frame let it through
+       (Hand, space held) — anything but a pan on it is the frame's own business */
+    if (action === 'pan') return startPan(e, isBackground)
+    if (action === 'marquee') startMarquee(e)
+    if (action === 'comment-canvas') {
+      /* a finger that moves is a pan, a finger that lifts in place is a
+         comment: the pan follows the movement, the comment checks the
+         distance on release and only opens when there was none */
+      if (e.pointerType === 'touch') startPan(e, isBackground)
+      startCanvasComment(e)
+    }
+  }
+
+  /* the Comment tool on empty canvas: a click (not a drag) opens the composer
+     at that point; the pin lands there when the comment is posted. Any
+     composer already open was closed by the press (CanvasComments). */
+  function startCanvasComment(e: React.PointerEvent) {
+    const origin = { x: e.clientX, y: e.clientY }
+    const point = toWorld(e.clientX, e.clientY)
+    /* the composer hangs beside the pin on whichever side keeps it on the
+       visible stage (the side panel overlays the stage's right edge) */
+    const rect = e.currentTarget.getBoundingClientRect()
+    const placement = placeComposer(e.clientX, rect.left, rect.right - rightInset)
+    function onUp(ev: PointerEvent) {
+      window.removeEventListener('pointerup', onUp)
+      if (Math.abs(ev.clientX - origin.x) + Math.abs(ev.clientY - origin.y) > 3) return
+      select(null)
+      setComposeAt({ x: point.x, y: point.y, placement, at: Date.now() })
+    }
+    window.addEventListener('pointerup', onUp)
   }
 
   function startPan(e: React.PointerEvent, isBackground: boolean) {
@@ -545,9 +796,13 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
       }
       setMarquee(rect)
       const frames = currentPageCanvas()?.frames ?? []
+      /* a hidden frame is not on the stage to be lassoed, and a locked one is
+         not the marquee's to take */
       const hits = frames
         .filter(
           (f) =>
+            !f.hidden &&
+            !f.locked &&
             f.x < rect.x + rect.width &&
             f.x + f.width > rect.x &&
             f.y < rect.y + rect.height &&
@@ -568,6 +823,7 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
   }
 
   function onPointerMove(e: React.PointerEvent) {
+    drawing.onPointerMove(e)
     const { x, y } = toWorld(e.clientX, e.clientY)
     sendCursor(Math.round(x), Math.round(y))
   }
@@ -585,10 +841,19 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
               'stage absolute inset-0 touch-none',
               panning
                 ? 'cursor-grabbing! [&_*]:cursor-grabbing!'
-                : panMode
+                : panMode || tool === 'hand'
                   ? 'cursor-grab! [&_*]:cursor-grab!'
-                  : 'cursor-default',
+                  : tool === 'comment'
+                    ? COMMENT_CURSOR
+                    : isDrawingTool(tool)
+                      ? tool === 'text'
+                        ? 'cursor-text! [&_:not([data-comment-ui]_*)]:cursor-text!'
+                        : 'cursor-crosshair! [&_:not([data-comment-ui]_*)]:cursor-crosshair!'
+                      : 'cursor-default',
             )}
+            onPointerDownCapture={drawing.onPointerDown}
+            onDoubleClickCapture={drawing.onDoubleClick}
+            onTouchStartCapture={drawing.onTouchStart}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onContextMenu={(e) => {
@@ -606,19 +871,33 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
             {/* dot grid on its own composited layer: panning is transform-only
             (zero paint), zooming repaints just this layer's tiny tile */}
             <div
-              className="pointer-events-none absolute left-0 top-0 h-[calc(100%+160px)] w-[calc(100%+160px)] origin-top-left will-change-transform [background-image:radial-gradient(circle,var(--dot)_1.2px,transparent_1.2px)]"
+              className="pointer-events-none absolute left-0 top-0 origin-top-left will-change-transform [background-image:radial-gradient(circle,var(--dot)_1.2px,transparent_1.2px)]"
               ref={gridRef}
             />
+            {/* frame names, in screen px (FrameLabelLayer): under the world,
+                so a frame dragged over another's name covers it as before */}
+            <div className="pointer-events-none absolute inset-0" ref={setLabelLayer} />
             {/* `world` is likewise a behaviour hook: pan hit-testing checks
             classList.contains('world') to tell background from frame */}
-            <div className="world absolute left-0 top-0 origin-top-left will-change-transform" ref={worldRef}>
-              {canvas?.frames.map((f) => (
-                <FrameView key={f.id} frame={f} raster={raster} />
-              ))}
+            <div
+              className="world absolute left-0 top-0 origin-top-left will-change-transform data-rezoom:**:transition-none!"
+              ref={worldRef}
+            >
+              <FrameLabelLayer.Provider value={labelLayer}>
+                {canvas?.frames.map((f) =>
+                  f.hidden ? (
+                    <HiddenFrameView key={f.id} frame={f} />
+                  ) : (
+                    <FrameView key={f.id} frame={f} layoutZoom={layoutZoom} />
+                  ),
+                )}
+              </FrameLabelLayer.Provider>
               <GhostFrames />
               <FlowOverlay />
               <SnapGuides />
+              <CanvasComments composeAt={composeAt} onComposeDone={dismissCompose} />
               <Cursors />
+              {drawing.preview}
               {marquee && (
                 <div
                   className="pointer-events-none absolute bg-brand/10 [box-shadow:inset_0_0_0_calc(1px/var(--zoom,1))_var(--brand)]"
@@ -626,37 +905,86 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
                 />
               )}
             </div>
+            {/* the pixel grid lies over the frames, not under them, so it lines
+                up their content; it never takes the pointer */}
+            <div
+              hidden
+              className="pointer-events-none absolute left-0 top-0 h-[calc(100%+16px)] w-[calc(100%+16px)] origin-top-left will-change-transform [--pixel-line:rgb(128_128_128/0.16)] [background-image:linear-gradient(to_right,var(--pixel-line)_1px,transparent_1px),linear-gradient(to_bottom,var(--pixel-line)_1px,transparent_1px)]"
+              ref={pixelGridRef}
+            />
           </div>
         </ContextMenuTrigger>
         <FollowFrame />
 
-        <Toolbar className="absolute bottom-[calc(8px+env(safe-area-inset-bottom))] left-1/2 z-[35] -translate-x-1/2 sm:bottom-4">
-          <ToolbarButton onClick={onAddFrame}>+ Frame</ToolbarButton>
-          <ToolbarDivider />
-          <ToolbarButton
-            aria-label="Zoom out"
-            onClick={() => {
-              const vp = useStore.getState().viewport
-              const el = ref.current!
-              zoomAround(el, vp, 1 / 1.25)
-            }}
-          >
-            −
-          </ToolbarButton>
-          <ToolbarValue ref={zoomLabelRef}>100%</ToolbarValue>
-          <ToolbarButton
-            aria-label="Zoom in"
-            onClick={() => {
-              const vp = useStore.getState().viewport
-              const el = ref.current!
-              zoomAround(el, vp, 1.25)
-            }}
-          >
-            +
-          </ToolbarButton>
-          <ToolbarDivider />
-          <ToolbarButton onClick={fit}>Fit</ToolbarButton>
-        </Toolbar>
+        {/* the tool rail: a vertical island beside the Layers panel on desktop
+            (the page sets --rail-left and --chrome-top), a centred strip at
+            the bottom on phones */}
+        <div
+          className={cn(
+            'absolute bottom-[calc(8px+env(safe-area-inset-bottom))] left-1/2 z-[35] -translate-x-1/2 sm:bottom-4',
+            'md:top-[calc(var(--chrome-top,0px)+10px)] md:bottom-auto md:left-[var(--rail-left,14px)] md:translate-x-0 md:transition-[left] md:duration-150',
+            uiHidden && 'hidden',
+          )}
+        >
+          {isDrawingTool(tool) && (
+            <div
+              data-drawing-hint
+              className="absolute bottom-full left-1/2 mb-2 flex w-max max-w-[min(340px,90vw)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-[10px] bg-surface px-3 py-2 text-center text-[12px] text-ink-soft shadow-pop md:top-0 md:bottom-auto md:left-full md:mb-0 md:ml-2.5 md:translate-x-0 md:justify-start md:text-left"
+            >
+              <span>
+                {tool === 'path'
+                  ? 'Click for corners · Drag for curves · Snap to points · Enter to finish'
+                  : tool === 'text'
+                    ? `Click or drag, then type · ${MOD_KEY}Enter to save`
+                    : tool === 'circle'
+                      ? 'Drag to draw a circle · Esc to cancel'
+                      : 'Drag to draw · Shift for a square · Esc to cancel'}
+              </span>
+              {drawing.pathActive && (
+                <>
+                  <button
+                    type="button"
+                    className="font-semibold text-brand disabled:opacity-40"
+                    disabled={!drawing.canFinishPath}
+                    onClick={drawing.finish}
+                  >
+                    Finish path
+                  </button>
+                  <button type="button" onClick={drawing.cancel}>
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <Toolbar aria-label="Canvas tools" className="md:w-10 md:flex-col">
+            {/* one fill slides between tools; the buttons themselves stay
+                transparent so the pill is the only thing that moves */}
+            <ToolbarHighlight activeKey={tool} />
+            {TOOLS.map((t) => (
+              <Tooltip key={t.id} label={`${t.label} (${t.key})`} side="right">
+                <ToolbarButton
+                  aria-label={t.label}
+                  aria-pressed={tool === t.id}
+                  className="relative z-[1] hover:bg-transparent aria-pressed:text-ink"
+                  onClick={() => setTool(t.id)}
+                >
+                  {TOOL_ICONS[t.id]}
+                </ToolbarButton>
+              </Tooltip>
+            ))}
+          </Toolbar>
+        </div>
+
+        <ZoomControls
+          labelRef={zoomLabelRef}
+          hidden={uiHidden}
+          onZoomIn={() => ref.current && zoomCentered(ref.current, useStore.getState().viewport.zoom * 1.25)}
+          onZoomOut={() => ref.current && zoomCentered(ref.current, useStore.getState().viewport.zoom / 1.25)}
+          onZoomTo={(zoom) => ref.current && zoomCentered(ref.current, zoom)}
+          onFit={fit}
+          onFitSelection={fitSelection}
+        />
 
         {canvas && (
           <ContextMenuContent>
@@ -673,12 +1001,4 @@ export function Stage({ onAddFrame }: { onAddFrame: () => void }) {
       </ContextMenu>
     </>
   )
-
-  function zoomAround(el: HTMLDivElement, vp: { x: number; y: number; zoom: number }, factor: number) {
-    const px = el.clientWidth / 2
-    const py = el.clientHeight / 2
-    const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, vp.zoom * factor))
-    const scale = zoom / vp.zoom
-    setViewport({ x: px - (px - vp.x) * scale, y: py - (py - vp.y) * scale, zoom })
-  }
 }

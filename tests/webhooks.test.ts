@@ -377,5 +377,14 @@ describe('payloads', () => {
     expect(
       webhooks.payloadFor({ type: 'comment.replied', comment: reply, frame: FRAME, actorKind: 'agent' }),
     ).toMatchObject({ comment: { parentId: 'cm1', url: 'http://localhost:4300/c/c1?frame=f1&comment=cm1' } })
+    /* a comment pinned to the canvas: page and point instead of a frame */
+    const { frameId: _frameId, ...rest } = COMMENT
+    const onCanvas = { ...rest, id: 'cm2', pageId: 'p1', x: 820, y: 240, selector: '', snippet: '' }
+    expect(
+      webhooks.payloadFor({ type: 'comment.created', comment: onCanvas, frame: undefined, actorKind: 'user' }),
+    ).toMatchObject({
+      comment: { frameId: null, pageId: 'p1', x: 820, y: 240, url: 'http://localhost:4300/c/c1?page=p1&comment=cm2' },
+      frame: null,
+    })
   })
 })

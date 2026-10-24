@@ -30,21 +30,24 @@ import { websiteAccessErrorMessage } from './websiteAccess.ts'
 import { mentionedRole } from '../shared/agents.ts'
 import * as allowance from './allowance.ts'
 import { previewOf, previewToolMeta, registerFramePreview, type CanvasPreview } from './chatgptApp.ts'
+import * as persist from './db/persist.ts'
 
 const INSTRUCTIONS = `Doop is a shared multiplayer design canvas: humans and AI agents design together in real time. Canvases contain frames — artboards that render complete HTML documents live for everyone viewing.
 
 You MUST call get_guide({ topic: "doop-instructions" }) once before using other Doop tools. Call it again if a long conversation may have compressed or dropped the guide text.
 
 - Context first: call get_canvas before adding or editing frames.
+- Element links: /c/<canvas_id>?frame=<frame_id>&selector=<URL-encoded CSS selector> identifies a specific element. Decode selector, read get_canvas and get_frame, and locate that element in the frame HTML before applying the feedback. If it no longer matches, ask for an updated reference.
 - Identity: pick an agent_name and reuse the SAME name on every call — your presence and edits are attributed live.
 - Narrate: call set_status with a one-line summary when you start a task and whenever your focus shifts — people watching the canvas see it live next to your name.
 - Creating: create_frame, then stream the design with append_frame_html one complete section at a time (~1–4 KB chunks; start=true on the first, done=true on the last). Each chunk renders the moment it arrives — viewers watch you work.
 - Review: after every create or significant edit you MUST call get_frame_screenshot and fix what looks wrong before moving on.
 - Small edits: edit_frame_html (exact find/replace — the change morphs into the rendered frame in place). Full redesigns: set_frame_html or a new stream. Rename/move/resize: update_frame.
+- History: every replace and stream files the design it overwrote. list_frame_versions shows a frame's earlier states; restore_frame_version brings one back (HTML and size) when a human asks for the previous version or your rework turned out worse.
 - Images: real imagery makes designs. search_images finds stock photos (you SEE thumbnails and pick), search_icons finds 200k+ UI icons as hotlinkable SVGs, search_logos finds real company logos by brand name or domain — call it once per brand BEFORE writing any logo wall, integration row, press bar or testimonial, and never ship a placeholder tile, "LOGO" text or an invented wordmark in its place, list_backgrounds shows a page of curated hero/section/bento backgrounds (glows, grainy meshes, aurora, painterly scenes) as thumbnails — browse it when a section wants atmosphere rather than defaulting to a flat CSS gradient, judge by eye whether one fits the frame, and draw your own when none does, upload_asset stores your own file (remote file → source_url; local file → local_file=true, returns a curl command) and returns a permanent URL. generate_image makes a new image from a prompt (a full-bleed hero background in the frame's exact palette, illustration, a product render, brand-specific hero art that stock cannot supply) and stores it as a permanent asset — reach for it when search_images cannot deliver the exact visual, or when the human asks for a generated image; it costs the human money or quota, so one considered prompt beats five drafts. Never inline images as data: URIs.
 - Websites: when a request names an existing site or URL — a redesign of it, or "like acme.com" — call import_webpage FIRST so an editable HTML snapshot lands on the canvas. Leave that source frame unchanged and design in a separate frame. view_website is only for read-only inspection when the page should not be added. If Doop cannot capture the site, do not retry with view_website because it uses the same capture path. Use your own browser or web tool and work only from content you actually observe; if that is unavailable, ask the user for screenshots or an HTML export rather than inventing content.
 ${extensionGuideLines()}- Feedback: humans reply to your tasks; their notes arrive inside your tool results as HUMAN FEEDBACK blocks — address them before continuing.
-- Comments: call get_comments to read element-pinned comments and replies on a canvas, optionally filtered by frame; reply_to_comment answers a thread and resolve_comment closes it. Reading does not claim feedback or comments. A reply that @mentions a resident role is metered like a comment left in the browser.
+- Comments: call get_comments to read comments and replies on a canvas — pinned to an element inside a frame, or to a point on the canvas (pageId, x, y) — optionally filtered by frame; reply_to_comment answers a thread and resolve_comment closes it. Reading does not claim feedback or comments. A reply that @mentions a resident role is metered like a comment left in the browser.
 - Guidelines: canvases can carry named style guides (brand rules, style recipes). get_canvas lists them with one-line summaries — read the relevant ones with get_guidelines BEFORE designing and follow them.
 - Memory: canvases can also carry pinned style references — exemplar designs humans marked as "more like this". get_canvas lists them; read the relevant one with get_reference and match its look. When your human gives you design feedback in conversation and you address it, record it with save_decision so the canvas remembers their taste.`
 
@@ -190,12 +193,16 @@ function frameSummary(f: {
   updatedBy: string
   html: string
   demo?: boolean
+  hidden?: boolean
+  locked?: boolean
 }) {
   return {
     id: f.id,
     pageId: f.pageId,
     name: f.name,
     ...(f.demo ? { demo: true } : {}),
+    ...(f.hidden ? { hidden: true } : {}),
+    ...(f.locked ? { locked: true } : {}),
     x: f.x,
     y: f.y,
     width: f.width,
@@ -654,11 +661,16 @@ export function buildMcpServer(owner?: string, ownerId?: string): McpServer {
     {
       title: 'Read comments',
       description:
-        'Read element-pinned comments and replies on a canvas, newest first, including author, text, frame, CSS selector, HTML snippet, parentId thread links, and claim/failure/resolution metadata. Includes resolved comments by default so complete conversations remain readable; set include_resolved to false for unresolved comments only. Returns the retained comment history (up to 100 entries per canvas), not an archive. Reading does not claim feedback or comments, or mark them resolved.',
+        'Read comments and replies on a canvas, newest first, including author, text, parentId thread links, and claim/failure/resolution metadata. An element comment carries its frameId, CSS selector and HTML snippet; a canvas comment is pinned to a point on the canvas instead and carries pageId, x and y (world coordinates) with no frame. Includes resolved comments by default so complete conversations remain readable; set include_resolved to false for unresolved comments only. Returns the retained comment history (up to 100 entries per canvas), not an archive. Reading does not claim feedback or comments, or mark them resolved.',
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         canvas_id: z.string(),
-        frame_id: z.string().optional().describe('Only comments on this frame; it must belong to the canvas.'),
+        frame_id: z
+          .string()
+          .optional()
+          .describe(
+            'Only element comments on this frame (canvas comments are left out); it must belong to the canvas.',
+          ),
         include_resolved: z.boolean().default(true).describe('Include resolved comments and replies. Default true.'),
         agent_name: agentName.optional(),
       },
@@ -904,7 +916,7 @@ export function buildMcpServer(owner?: string, ownerId?: string): McpServer {
     },
     async ({ frame_id, html, agent_name }) => {
       if (!frameFor(frame_id)) return noFrame(frame_id)
-      const frame = actions.updateFrame(frame_id, { html }, actorFrom(agent_name))
+      const frame = actions.updateFrame(frame_id, { html }, actorFrom(agent_name), { replace: true })
       if (!frame) return noFrame(frame_id)
       return withPreview(
         withGuidelinesNudge(
@@ -1583,7 +1595,8 @@ export function buildMcpServer(owner?: string, ownerId?: string): McpServer {
     {
       title: 'Rename, move or resize a frame',
       _meta: previewToolMeta('Updating the frame…', 'Frame updated'),
-      description: 'Update frame metadata: rename it, move/resize it, or move it to another page using pageId.',
+      description:
+        'Update frame metadata: rename it, move/resize it, or move it to another page using pageId. Set locked to true to lock the frame on the canvas (humans cannot select, move, resize or delete it from the stage until it is unlocked) or false to unlock it.',
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         frame_id: z.string(),
@@ -1593,6 +1606,7 @@ export function buildMcpServer(owner?: string, ownerId?: string): McpServer {
         y: z.number().optional(),
         width: z.number().optional(),
         height: z.number().optional(),
+        locked: z.boolean().optional(),
         agent_name: agentName,
       },
     },
@@ -1606,6 +1620,57 @@ export function buildMcpServer(owner?: string, ownerId?: string): McpServer {
         withFeedback(text({ ok: true, frame: frameSummary(frame) }), frame.canvasId, actorFrom(agent_name)),
         frame.canvasId,
         [frame],
+      )
+    },
+  )
+
+  server.registerTool(
+    'list_frame_versions',
+    {
+      title: 'List a frame’s version history',
+      description:
+        'List the earlier states of a frame, newest first: every design a replace, stream or restore overwrote, with who authored it and when. HTML is not included — restore_frame_version brings a state back, get_frame shows the current one.',
+      inputSchema: { frame_id: z.string(), agent_name: agentName.optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ frame_id, agent_name }) => {
+      const f = frameFor(frame_id)
+      if (!f) return noFrame(frame_id)
+      arrive(f.canvasId, agent_name)
+      const versions = await persist.listFrameVersions(frame_id)
+      return text({
+        frame: frameSummary(f),
+        versions: versions.map((v) => ({
+          id: v.id,
+          savedBy: v.savedBy,
+          savedByKind: v.savedByKind,
+          savedAt: new Date(v.savedAt).toISOString(),
+          width: v.width,
+          height: v.height,
+          htmlBytes: v.htmlBytes,
+        })),
+      })
+    },
+  )
+
+  server.registerTool(
+    'restore_frame_version',
+    {
+      title: 'Restore an earlier version of a frame',
+      description:
+        'Put a frame back to one of its earlier states (from list_frame_versions): its HTML and size are restored, name and position stay. The design being replaced is filed as a version first, so a restore can itself be undone. Use it when a human asks for the previous version, or when your own rework turned out worse than what was there.',
+      inputSchema: { frame_id: z.string(), version_id: z.string(), agent_name: agentName },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ frame_id, version_id, agent_name }) => {
+      if (!frameFor(frame_id)) return noFrame(frame_id)
+      const restored = await actions.restoreFrameVersion(frame_id, version_id, actorFrom(agent_name))
+      if (restored === null) return err(`no version ${version_id} on frame ${frame_id} — call list_frame_versions`)
+      if (!restored) return noFrame(frame_id)
+      return withFeedback(
+        textWithNudge({ ok: true, frame: frameSummary(restored.frame) }, REVIEW_NUDGE),
+        restored.frame.canvasId,
+        actorFrom(agent_name),
       )
     },
   )

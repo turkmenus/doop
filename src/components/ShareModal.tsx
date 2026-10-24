@@ -8,16 +8,18 @@ import {
 import { navigate } from '../App'
 import type { WorkspaceSummary } from '../../shared/types'
 import { api, ApiError, paywalledWorkspace, type CanvasMember } from '../lib/api'
-import { UpgradeModal } from './WorkspaceModals'
-import { Sel } from './AutomateShell'
+import { PERSONAL_WORKSPACE, UpgradeModal } from './WorkspaceModals'
 import { authClient } from '../lib/auth'
 import { posthog } from '../lib/posthog'
 import { Avatar } from './ui/avatar'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
-import { BuildingIcon, XIcon } from './ui/icons'
+import { IconButton } from './ui/icon-button'
+import { BuildingIcon, CopyIcon, XIcon } from './ui/icons'
 import { Input } from './ui/input'
+import { PersonRow } from './ui/list'
 import { Modal, ModalTitle } from './ui/modal'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Textarea } from './ui/textarea'
 import { ToggleChipGroup, ToggleChipItem } from './ui/toggle-chip'
 
@@ -156,17 +158,13 @@ export function ShareModal({
   return (
     <Modal size="sm" onClose={onClose}>
       <>
-        <div className="flex items-start justify-between gap-3">
-          <ModalTitle className="min-w-0">Share “{canvas.name}”</ModalTitle>
-          <Button variant="ghost" size="icon" className="size-10" aria-label="Close sharing" onClick={onClose}>
-            <XIcon />
-          </Button>
-        </div>
+        <ModalTitle className="min-w-0">Share “{canvas.name}”</ModalTitle>
         {isOwner && (
           <>
             <div className="mt-4 flex flex-col items-stretch gap-2 sm:flex-row">
               <Input
-                className="flex-1 rounded-[10px] bg-paper focus:ring-0"
+                variant="well"
+                className="flex-1"
                 autoFocus
                 placeholder="Invite by email (doop account)"
                 value={email}
@@ -185,94 +183,95 @@ export function ShareModal({
             </div>
           </>
         )}
-        {error && <p className="mx-[2px] mt-2 text-[12px] text-accent-ink">{error}</p>}
+        {error && <p className="mx-[2px] mt-2 text-label text-accent-ink">{error}</p>}
         <div className="mt-[14px] mb-1 flex max-h-[40vh] flex-col gap-[2px] overflow-y-auto">
           {(people ?? []).map((person) => (
-            <div key={person.userId} className="flex items-center gap-2.5 px-[2px] py-1.5">
-              <Avatar name={person.name} className="size-7 flex-none border-0 text-xs" />
-              <span className="flex min-w-0 flex-1 flex-col leading-[1.3]">
-                <b className="overflow-hidden whitespace-nowrap text-ellipsis text-[13px] font-semibold">
-                  {person.name}
-                  {person.userId === meId ? ' (you)' : ''}
-                </b>
-                <span className="overflow-hidden whitespace-nowrap text-ellipsis text-[12px] text-ink-faint">
-                  {person.email}
-                </span>
-              </span>
-              {person.owner ? (
-                <span className="flex-none text-[12px] text-ink-faint">Owner</span>
-              ) : isOwner || person.userId === meId ? (
-                <Button
-                  variant="bare"
-                  size="icon-sm"
-                  className="flex-none text-[13px] hover:bg-accent-ink/10 hover:text-accent-ink"
-                  title={person.userId === meId ? 'Leave this canvas' : 'Remove'}
-                  disabled={busy}
-                  onClick={() => remove(person.userId)}
-                >
-                  ✕
-                </Button>
-              ) : (
-                <span className="flex-none text-[12px] text-ink-faint">Can edit</span>
-              )}
-            </div>
+            <PersonRow
+              key={person.userId}
+              className="px-[2px] py-1.5"
+              avatar={<Avatar name={person.name} size={28} />}
+              name={`${person.name}${person.userId === meId ? ' (you)' : ''}`}
+              detail={person.email}
+              trailing={
+                person.owner ? (
+                  <span className="text-label text-ink-faint">Owner</span>
+                ) : isOwner || person.userId === meId ? (
+                  <IconButton
+                    variant="danger"
+                    size="sm"
+                    aria-label={person.userId === meId ? 'Leave this canvas' : `Remove ${person.name}`}
+                    disabled={busy}
+                    onClick={() => remove(person.userId)}
+                  >
+                    <XIcon width={14} height={14} />
+                  </IconButton>
+                ) : (
+                  <span className="text-label text-ink-faint">Can edit</span>
+                )
+              }
+            />
           ))}
-          {people === null && <p className="text-[12px] text-ink-faint">Loading…</p>}
+          {people === null && <p className="text-label text-ink-faint">Loading…</p>}
           {canvas.workspaceId && (
-            <div className="flex items-center gap-2.5 px-[2px] py-1.5">
-              <span className="grid size-7 flex-none place-items-center rounded-full bg-paper-deep text-ink-soft">
-                <BuildingIcon width={14} height={14} aria-hidden />
-              </span>
-              <span className="flex min-w-0 flex-1 flex-col leading-[1.3]">
-                <b className="truncate text-[13px] font-semibold">Everyone in {workspace?.name ?? 'the workspace'}</b>
-                <span className="truncate text-[12px] text-ink-faint">
-                  {workspace
-                    ? `${workspace.memberCount} ${workspace.memberCount === 1 ? 'person' : 'people'}`
-                    : 'workspace members'}
+            <PersonRow
+              className="px-[2px] py-1.5"
+              avatar={
+                <span className="grid size-7 flex-none place-items-center rounded-full bg-paper-deep text-ink-soft">
+                  <BuildingIcon width={14} height={14} aria-hidden />
                 </span>
-              </span>
-              <span className="flex-none text-[12px] text-ink-faint">Can edit</span>
-            </div>
+              }
+              name={`Everyone in ${workspace?.name ?? 'the workspace'}`}
+              detail={
+                workspace
+                  ? `${workspace.memberCount} ${workspace.memberCount === 1 ? 'person' : 'people'}`
+                  : 'workspace members'
+              }
+              trailing={<span className="text-label text-ink-faint">Can edit</span>}
+            />
           )}
         </div>
         {/* filing: a workspace canvas is open to the whole team, so the
             choice sits with the access controls rather than in a menu */}
         {isOwner && workspaces.length > 0 && (
           <div className="mt-2.5 flex flex-col gap-2 border-t border-line-soft pt-3.5 sm:flex-row sm:items-center">
-            <span className="text-[13px] font-medium text-ink">Workspace</span>
-            <Sel
-              className="sm:ml-auto sm:w-[240px]"
-              value={canvas.workspaceId ?? ''}
+            <span className="text-body font-medium text-ink">Workspace</span>
+            <Select
+              value={canvas.workspaceId ?? PERSONAL_WORKSPACE}
               disabled={busy}
-              onChange={(event) => move(event.target.value)}
-              aria-label="Workspace this canvas lives in"
+              onValueChange={(value) => void move(value === PERSONAL_WORKSPACE ? '' : value)}
             >
-              <option value="">Personal — invite-only</option>
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
-                  {w.active ? '' : ' (needs a plan)'}
-                </option>
-              ))}
-            </Sel>
+              <SelectTrigger className="sm:ml-auto sm:w-[240px]" aria-label="Workspace this canvas lives in">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={PERSONAL_WORKSPACE}>Personal — invite-only</SelectItem>
+                {workspaces.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.name}
+                    {w.active ? '' : ' (needs a plan)'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
         <div className="mt-2.5 flex flex-col items-stretch justify-between gap-2.5 border-t border-line-soft pt-3.5 sm:flex-row sm:items-center">
           {isOwner ? (
             <label
-              className="relative flex cursor-pointer items-center gap-2 text-[13px] font-medium text-ink"
+              className="relative flex cursor-pointer items-center gap-2 text-body font-medium text-ink"
               title="Off = only you and invited people can open this canvas"
             >
               <Checkbox checked={linkEdits} disabled={busy} onChange={(event) => toggleLink(event.target.checked)} />
               Anyone with the link can edit
             </label>
           ) : (
-            <span className="text-xs text-ink-faint">
+            <span className="text-label text-ink-faint">
               {linkEdits ? 'Anyone with the link can edit' : 'Invite-only canvas'}
             </span>
           )}
-          <Button className="justify-center" onClick={copy}>
-            ⧉ Copy link
+          <Button className="justify-center gap-2" onClick={copy}>
+            <CopyIcon className="size-3.5" />
+            Copy link
           </Button>
         </div>
         {isOwner && (
@@ -335,13 +334,13 @@ function CommunityListing({
   return (
     <div className="mt-3.5 border-t border-line-soft pt-3.5">
       <label
-        className="flex cursor-pointer items-center gap-2 text-[13px] font-medium text-ink"
+        className="flex cursor-pointer items-center gap-2 text-body font-medium text-ink"
         title="Anyone on doop can preview and copy a listed canvas. The canvas itself stays private."
       >
         <Checkbox checked={published} disabled={busy} onChange={(event) => save(event.target.checked)} />
         Show in the community gallery
       </label>
-      <p className="mt-1 pl-[26px] text-[12px] leading-snug text-ink-faint">
+      <p className="mt-1 pl-[26px] text-label leading-snug text-ink-faint">
         People can preview it and copy it into their own account. Your canvas stays private.
       </p>
       {published && (
@@ -349,7 +348,7 @@ function CommunityListing({
           <Textarea
             rows={2}
             maxLength={280}
-            className="rounded-[10px] bg-paper text-[13px] focus:ring-0"
+            variant="well"
             placeholder="What is this design? One or two lines helps people find it."
             value={description}
             disabled={busy}
@@ -362,7 +361,7 @@ function CommunityListing({
             onValueChange={(next) => setCategory(next as CommunityCategory)}
           >
             {COMMUNITY_CATEGORIES.map((value) => (
-              <ToggleChipItem key={value} value={value} className="px-2.5 py-1 text-[12px]" disabled={busy}>
+              <ToggleChipItem key={value} value={value} size="sm" disabled={busy}>
                 {COMMUNITY_CATEGORY_LABELS[value]}
               </ToggleChipItem>
             ))}

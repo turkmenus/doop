@@ -1,8 +1,6 @@
 import AuthenticationServices
 import SwiftUI
 
-private let doopBlue = Color(red: 39/255, green: 67/255, blue: 238/255)
-
 struct ContentView: View {
     @StateObject private var app = AppModel()
     @State private var settings = false
@@ -17,18 +15,20 @@ struct ContentView: View {
                 LibraryView(app: app, settings: $settings)
             }
         }
-        .tint(doopBlue)
+        .tint(.primary)
         .task { await app.restore() }
-        .sheet(isPresented: $settings) { NativeSettings(app: app).tint(doopBlue) }
+        .sheet(isPresented: $settings) { NativeSettings(app: app).tint(.primary) }
     }
 }
 
 private struct DoopWordmark: View {
     var body: some View {
-        HStack(spacing: 10) {
-            Image("AppMark").resizable().frame(width: 34, height: 34).clipShape(RoundedRectangle(cornerRadius: 9))
+        HStack(spacing: 12) {
+            Image("AppMark").resizable().frame(width: 30, height: 30).clipShape(RoundedRectangle(cornerRadius: 7.2))
                 .accessibilityHidden(true)
-            Text("doop").font(.system(size: 28, weight: .heavy, design: .rounded))
+            // Match src/components/ui/wordmark.tsx: Inter 800, -0.01em.
+            Text("Doop").font(.custom("Inter-Regular_ExtraBold", size: 18, relativeTo: .headline))
+                .tracking(-0.18)
         }
     }
 }
@@ -79,7 +79,8 @@ private struct SignInView: View {
                     DoopWordmark().padding(.top, 32)
                     VStack(alignment: .leading, spacing: 10) {
                         Text(registering ? "Make room for\nyour next idea." : "Your ideas.\nAnywhere.")
-                            .font(.system(size: 42, weight: .bold, design: .rounded)).fixedSize(horizontal: false, vertical: true)
+                            .font(.custom("Inter-Regular_Medium", size: 42, relativeTo: .largeTitle))
+                            .tracking(-0.42).fixedSize(horizontal: false, vertical: true)
                         Text("A shared design space for you, your team, and your agents.")
                             .font(.title3).foregroundStyle(.secondary)
                     }
@@ -207,9 +208,8 @@ private struct LibraryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("YOUR DESIGN SPACE").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(doopBlue)
                         Text("What’s next, \(app.user?.name.components(separatedBy: " ").first ?? "designer")?")
-                            .font(.system(.largeTitle, design: .rounded).bold())
+                            .font(.custom("HankenGrotesk-Regular_Light", size: 34, relativeTo: .largeTitle))
                         Text("Pick up an idea. Or start something new.").foregroundStyle(.secondary)
                     }.padding(.top, 12)
                     HStack {
@@ -224,7 +224,7 @@ private struct LibraryView: View {
                     if let error = app.error { Text(error).foregroundStyle(.red).font(.callout) }
                     if filtered.isEmpty {
                         VStack(spacing: 12) {
-                            Image(systemName: query.isEmpty ? "square.stack.3d.up" : "magnifyingglass").font(.largeTitle).foregroundStyle(doopBlue)
+                            Image(systemName: query.isEmpty ? "square.stack.3d.up" : "magnifyingglass").font(.largeTitle).foregroundStyle(.secondary)
                             Text(query.isEmpty ? "Your next idea starts here." : "No matching canvases").font(.headline)
                             if query.isEmpty { Button("Create a canvas") { title = ""; creating = true }.buttonStyle(.borderedProminent) }
                         }.frame(maxWidth: .infinity).padding(.vertical, 60)
@@ -320,12 +320,11 @@ private struct LibraryView: View {
                     GlassDockButton(label: "Canvases", symbol: "square.grid.2x2.fill", selected: !showingAgents) {
                         showingAgents = false; searching = false; query = ""
                     }
-                    GlassDockButton(label: "Working agents", symbol: "sparkles", caption: "Agents", selected: showingAgents) { showingAgents = true; searchFocused = false }
+                    GlassDockButton(label: "Working agents", symbol: "sparkles", selected: showingAgents) { showingAgents = true; searchFocused = false }
                 }
                 Button { settings = true } label: {
-                    Text(String(app.user?.name.prefix(1) ?? "D")).font(.title3.bold())
-                        .frame(width: 48, height: 48)
-                        .background(Color.accentColor.opacity(0.15), in: Circle()).padding(6)
+                    Text(String(app.user?.name.prefix(1) ?? "D")).font(.body.weight(.medium))
+                        .frame(width: 44, height: 44).padding(4)
                 }.buttonStyle(.plain).modifier(FloatingGlass()).accessibilityLabel("Account and settings")
             }
         }.frame(maxWidth: 600).padding(.horizontal, 20).padding(.top, 10)
@@ -398,14 +397,14 @@ private struct CanvasCard: View {
                     Spacer()
                     Text(Date(timeIntervalSince1970: canvas.updatedAt / 1000).formatted(.relative(presentation: .named)))
                 }.font(.caption).foregroundStyle(.secondary)
-                if canvas.shared == true { Label("Shared with you", systemImage: "person.2").font(.caption2).foregroundStyle(doopBlue) }
+                if canvas.shared == true { Label("Shared with you", systemImage: "person.2").font(.caption2).foregroundStyle(.secondary) }
             }.padding(18)
         }
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.primary.opacity(0.06)))
     }
-    private var placeholder: some View { Image(systemName: "square.stack.3d.up").font(.system(size: 42, weight: .ultraLight)).foregroundStyle(doopBlue.opacity(0.5)) }
+    private var placeholder: some View { Image(systemName: "square.stack.3d.up").font(.system(size: 42, weight: .ultraLight)).foregroundStyle(.tertiary) }
 }
 
 private struct NativeSettings: View {
@@ -549,9 +548,9 @@ struct WorkingAgentsView: View {
                             ForEach((canvas.activeTasks ?? []).sorted { $0.startedAt > $1.startedAt }) { task in
                                 HStack(alignment: .top, spacing: 12) {
                                     Image(systemName: task.agentName.isEmpty ? "clock" : "sparkles")
-                                        .foregroundStyle(task.agentName.isEmpty ? .orange : .blue)
+                                        .foregroundStyle(task.agentName.isEmpty ? .orange : .primary)
                                         .frame(width: 36, height: 36)
-                                        .background(Color.accentColor.opacity(0.08), in: Circle())
+                                        .background(Color.primary.opacity(0.08), in: Circle())
                                     VStack(alignment: .leading, spacing: 5) {
                                         HStack {
                                             Text(task.agentName.isEmpty ? "Waiting for an agent" : task.agentName).font(.subheadline.bold())

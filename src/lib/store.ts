@@ -4,7 +4,6 @@ import type {
   ActivityItem,
   AgentTask,
   Canvas,
-  ChatMessage,
   DesignDecision,
   ElementComment,
   Frame,
@@ -16,6 +15,7 @@ import type {
   TaskFeedback,
 } from '../../shared/types'
 import type { SnapGuide } from './snap'
+import type { Tool } from './tools'
 
 export interface Viewport {
   x: number
@@ -23,17 +23,15 @@ export interface Viewport {
   zoom: number
 }
 
-export type PanelTab = 'tasks' | 'chat' | 'activity' | 'memory'
+export type PanelTab = 'tasks' | 'comments' | 'activity' | 'memory'
 
-const chatSeenKey = (canvasId: string) => `doop:chatSeen:${canvasId}`
-
-function loadChatSeen(canvasId: string): number {
-  try {
-    return Number(localStorage.getItem(chatSeenKey(canvasId)) ?? 0) || 0
-  } catch {
-    return 0
-  }
-}
+/** A send from the Agents tab composer: in flight, or how the last one
+ *  ended. Lives in the store because the composer unmounts with its tab and
+ *  a failure must still be there when the tab comes back. */
+export type ComposerSend =
+  | { canvasId: string; status: 'busy' }
+  | { canvasId: string; status: 'sent'; at: number }
+  | { canvasId: string; status: 'error'; message: string; at: number }
 
 interface State {
   canvas: Canvas | null
@@ -46,11 +44,6 @@ interface State {
   feedback: TaskFeedback[]
   /** element-anchored comments (newest first) */
   comments: ElementComment[]
-  /** the canvas chat (newest first) */
-  chat: ChatMessage[]
-  /** when this browser last had the chat open on this canvas — everything
-   *  newer from someone else counts as unread on the rail */
-  chatSeenAt: number
   /** design decisions captured into Memory (newest first) */
   decisions: DesignDecision[]
   /** distiller rule proposals (newest first) */
@@ -64,6 +57,8 @@ interface State {
   /** the primary selection (the last frame added) — what the Inspector,
    *  presence, and the flow overlay follow */
   selectedId: string | null
+  /** the active canvas tool in the bottom toolbar */
+  tool: Tool
   /** space bar held: the stage pans on drag instead of drawing a marquee */
   panMode: boolean
   /** the Inspector panel is showing — opened by clicking a frame's name, not
@@ -76,12 +71,19 @@ interface State {
    *  surface and a click on a Layers row both land here, so the outline in
    *  the frame and the highlighted row stay in step */
   selectedElement: { frameId: string; selector: string } | null
+  /** the element under the pointer in the Layers panel — its frame outlines
+   *  it on the canvas, the same as a hover over the frame itself */
+  hoveredLayer: { frameId: string; selector: string } | null
   /** the element properties panel is showing — opened by a pick (a click on
    *  the frame surface or a Layers row), it then follows whatever element is
    *  selected until it is closed */
   elementPanelOpen: boolean
   /** the Layers rail is showing (desktop); the choice sticks across visits */
   layersOpen: boolean
+  /** ⌘. — every panel and toolbar is off screen, leaving only the canvas.
+   *  A plain overlay flag: the panels' own open/closed state is untouched
+   *  underneath, so toggling back shows exactly what was open before */
+  uiHidden: boolean
   viewport: Viewport
   /** live alignment guide lines while a frame drag is snapped to a neighbour */
   snapGuides: SnapGuide[]
@@ -109,6 +111,17 @@ interface State {
   /** a request for the Stage to glide the camera to a frame — the prompt bar
    *  raises it so a first deliverable streams in on-screen, never off-canvas */
   flyTo: { frameId: string; at: number } | { point: { x: number; y: number }; at: number } | null
+  /** a request for the frame holding this comment thread to open its pin —
+   *  the Comments panel raises it; the FrameView that owns the root consumes it */
+  threadRequest: { id: string; at: number } | null
+  /** when the "Design it" composer in the Agents tab was last asked to take
+   *  focus (⌘K) — a timestamp, so a composer that mounts long after an old
+   *  request does not grab the keyboard */
+  composerFocusAt: number
+  /** the composer's unsent text per canvas — collapsing the panel or
+   *  switching tabs unmounts the field and must not eat the draft */
+  composerDrafts: Record<string, string>
+  composerSend: ComposerSend | null
   /** clientId of the peer whose camera this one is tracking (Figma-style
    *  follow); any camera move of our own lets go */
   following: string | null
@@ -139,10 +152,6 @@ interface State {
   upsertFeedback(fb: TaskFeedback): void
   setComments(comments: ElementComment[]): void
   upsertComment(c: ElementComment): void
-  setChat(messages: ChatMessage[]): void
-  pushChat(message: ChatMessage): void
-  /** the chat is on screen: nothing is unread any more */
-  markChatSeen(): void
   upsertFrame(f: Frame): void
   patchFrameLocal(frameId: string, patch: Partial<Frame>): void
   removeFrame(frameId: string): void
@@ -164,22 +173,34 @@ interface State {
   requestFlyTo(frameId: string): void
   /** glide the camera to a world point at the current zoom (a peer's cursor) */
   requestFlyToPoint(x: number, y: number): void
+  /** open the pin of this comment thread on its frame (the Comments panel) */
+  requestOpenThread(commentId: string): void
+  /** the owning frame has opened the thread */
+  clearThreadRequest(): void
+  /** put the keyboard in the Agents tab's composer (the page opens the panel
+   *  on that tab first) */
+  requestComposerFocus(): void
+  setComposerDraft(canvasId: string, text: string): void
+  setComposerSend(send: ComposerSend | null): void
   select(id: string | null): void
   /** ⇧-click: add the frame to the selection, or drop it if already in */
   toggleSelect(id: string): void
   /** marquee: replace the selection with these frames */
   selectMany(ids: string[]): void
+  setTool(tool: Tool): void
   setPanMode(v: boolean): void
   setInspectorOpen(v: boolean): void
   openCtxMenu(menu: { frameId: string; deferPanel: boolean }): void
   closeCtxMenu(): void
   setSelectedElement(el: { frameId: string; selector: string } | null): void
+  setHoveredLayer(el: { frameId: string; selector: string } | null): void
   /** an element picked by the user — on the frame surface or in the Layers
    *  rail: selects it and opens its properties panel; picking nothing clears
    *  the selection and closes the panel */
   pickElement(el: { frameId: string; selector: string } | null): void
   setElementPanelOpen(v: boolean): void
   setLayersOpen(v: boolean): void
+  toggleUiHidden(): void
   setViewport(v: Viewport): void
   setSnapGuides(guides: SnapGuide[]): void
   flash(frameId: string, color: string): void
@@ -207,23 +228,28 @@ export const useStore = create<State>((set, get) => ({
   tasks: [],
   feedback: [],
   comments: [],
-  chat: [],
-  chatSeenAt: 0,
   decisions: [],
   proposals: [],
   panelTab: 'tasks',
   limitWall: false,
   allowanceVersion: 0,
   flyTo: null,
+  threadRequest: null,
+  composerFocusAt: 0,
+  composerDrafts: {},
+  composerSend: null,
   following: null,
   selectedIds: [],
   selectedId: null,
+  tool: 'select',
   panMode: false,
   inspectorOpen: false,
   ctxMenu: null,
   selectedElement: null,
+  hoveredLayer: null,
   elementPanelOpen: false,
   layersOpen: readLayersOpen(),
+  uiHidden: false,
   viewport: { x: 0, y: 0, zoom: 1 },
   snapGuides: [],
   connected: false,
@@ -236,6 +262,10 @@ export const useStore = create<State>((set, get) => ({
   setCanvas: (canvas) =>
     set((s) => ({
       canvas,
+      /* leaving a canvas (CanvasPage unmounts or its id changes) ends ⌘.
+         hide-UI, so the next canvas never opens with its chrome gone; a
+         re-join of the same canvas keeps it */
+      uiHidden: canvas ? s.uiHidden : false,
       activePageId: canvas
         ? canvas.id === s.canvas?.id && canvasPages(canvas).some((p) => p.id === s.activePageId)
           ? s.activePageId
@@ -337,22 +367,6 @@ export const useStore = create<State>((set, get) => ({
     }),
   setFeedback: (feedback) => set({ feedback }),
   setComments: (comments) => set({ comments }),
-  setChat: (chat) => set((s) => ({ chat, chatSeenAt: s.canvas ? loadChatSeen(s.canvas.id) : 0 })),
-  pushChat: (message) =>
-    set((s) => (s.chat.some((m) => m.id === message.id) ? {} : { chat: [message, ...s.chat].slice(0, 300) })),
-  markChatSeen: () =>
-    set((s) => {
-      const latest = s.chat[0]?.at ?? 0
-      if (latest <= s.chatSeenAt) return {}
-      if (s.canvas) {
-        try {
-          localStorage.setItem(chatSeenKey(s.canvas.id), String(latest))
-        } catch {
-          /* private mode: the badge just comes back next visit */
-        }
-      }
-      return { chatSeenAt: latest }
-    }),
   upsertComment: (c) =>
     set((s) => {
       const comments = s.comments.some((x) => x.id === c.id)
@@ -476,6 +490,18 @@ export const useStore = create<State>((set, get) => ({
     set({ flyTo: { frameId, at: Date.now() } })
   },
   requestFlyToPoint: (x, y) => set({ flyTo: { point: { x, y }, at: Date.now() } }),
+  requestOpenThread: (id) => set({ threadRequest: { id, at: Date.now() } }),
+  clearThreadRequest: () => set({ threadRequest: null }),
+  requestComposerFocus: () => set({ composerFocusAt: Date.now() }),
+  setComposerDraft: (canvasId, text) =>
+    set((s) => ({
+      composerDrafts: { ...s.composerDrafts, [canvasId]: text },
+      /* a failure stays up until the draft is touched again: it is not on a
+         timer, so a send that failed while another tab was open is still
+         there when this one comes back */
+      composerSend: s.composerSend?.status === 'error' ? null : s.composerSend,
+    })),
+  setComposerSend: (composerSend) => set({ composerSend }),
   /* selecting a different frame (or deselecting) closes the Inspector — the
      panel must not follow surface clicks, paste, or undo onto another frame.
      Re-selecting the same frame keeps an open panel open. */
@@ -509,10 +535,17 @@ export const useStore = create<State>((set, get) => ({
         : { selectedIds: ids, selectedId, inspectorOpen: false, selectedElement: null, elementPanelOpen: false }
     })
   },
+  setTool: (tool) => set({ tool }),
   setPanMode: (panMode) => set({ panMode }),
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
   openCtxMenu: (ctxMenu) => set({ ctxMenu }),
   closeCtxMenu: () => set({ ctxMenu: null }),
+  setHoveredLayer: (hoveredLayer) =>
+    set((s) =>
+      s.hoveredLayer?.frameId === hoveredLayer?.frameId && s.hoveredLayer?.selector === hoveredLayer?.selector
+        ? s
+        : { hoveredLayer },
+    ),
   setSelectedElement: (selectedElement) =>
     set((s) =>
       s.selectedElement?.frameId === selectedElement?.frameId &&
@@ -536,6 +569,7 @@ export const useStore = create<State>((set, get) => ({
     }
     set({ layersOpen })
   },
+  toggleUiHidden: () => set((s) => ({ uiHidden: !s.uiHidden })),
   /* every ordinary camera move (pan, zoom, fit, fly-to) is ours, so it ends a follow */
   setViewport: (viewport) => set({ viewport, following: null }),
   /* fires on every pointermove during a drag — skip the no-op transitions

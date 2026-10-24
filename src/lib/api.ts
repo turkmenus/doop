@@ -4,13 +4,14 @@ import type { NotificationPrefs, NotificationSettings } from '../../shared/notif
 import type { WebhookDeliveryResult, WebhookEventType, WebhookInfo } from '../../shared/webhooks'
 import type {
   ActivityItem,
-  ChatMessage,
   Canvas,
   CanvasMeta,
   CardScope,
   CommunityCategory,
   CommunityItem,
   Frame,
+  FrameVersion,
+  FrameVersionInfo,
   WorkspaceDetail,
   WorkspaceInvite,
   WorkspaceMember,
@@ -397,6 +398,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ pages, expectedPages }),
     }),
+  duplicatePage: (canvasId: string, pageId: string) =>
+    req<{
+      page: import('../../shared/types').CanvasPageInfo
+      pages: import('../../shared/types').CanvasPageInfo[]
+      frames: Frame[]
+    }>(`/api/canvases/${canvasId}/pages/${pageId}/duplicate`, { method: 'POST' }),
   createFrame: (canvasId: string, input: Partial<Frame> & { name: string }) =>
     req<Frame>(`/api/canvases/${canvasId}/frames`, {
       method: 'POST',
@@ -407,10 +414,26 @@ export const api = {
         actor: actor(),
       }),
     }),
-  updateFrame: (frameId: string, patch: Partial<Frame>) =>
-    req<Frame>('/api/frames/' + frameId, { method: 'PATCH', body: JSON.stringify({ ...patch, actor: actor() }) }),
-  deleteFrame: (frameId: string) =>
-    req('/api/frames/' + frameId, { method: 'DELETE', body: JSON.stringify({ actor: actor() }) }),
+  updateFrame: (frameId: string, patch: Partial<Frame>, expectedUpdatedAt?: number) =>
+    req<Frame>('/api/frames/' + frameId, {
+      method: 'PATCH',
+      body: JSON.stringify({ ...patch, expectedUpdatedAt, actor: actor() }),
+    }),
+  deleteFrame: (frameId: string, expectedUpdatedAt?: number) =>
+    req('/api/frames/' + frameId, { method: 'DELETE', body: JSON.stringify({ expectedUpdatedAt, actor: actor() }) }),
+  /* design history: the states earlier edits replaced, newest first (no HTML) */
+  frameVersions: (frameId: string) => req<FrameVersionInfo[]>(`/api/frames/${frameId}/versions`),
+  frameVersion: (frameId: string, versionId: string) =>
+    req<FrameVersion>(`/api/frames/${frameId}/versions/${versionId}`),
+  /* `replaced` is the complete state the server swapped out — the undo copy */
+  restoreFrameVersion: (frameId: string, versionId: string) =>
+    req<{ frame: Frame; replaced: Pick<Frame, 'html' | 'width' | 'height'> }>(
+      `/api/frames/${frameId}/versions/${versionId}/restore`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ actor: actor() }),
+      },
+    ),
   sendTaskFeedback: (taskId: string, text: string) =>
     req(`/api/tasks/${taskId}/feedback`, { method: 'POST', body: JSON.stringify({ text, from: getIdentity().name }) }),
   importPage: (canvasId: string, url: string) =>
@@ -459,10 +482,11 @@ export const api = {
     req(`/api/canvases/${canvasId}/cards/${cardId}/done`, { method: 'POST' }),
   retryCard: (canvasId: string, cardId: string) =>
     req(`/api/canvases/${canvasId}/cards/${cardId}/retry`, { method: 'POST' }),
-  sendChat: (canvasId: string, text: string) =>
-    req<ChatMessage>(`/api/canvases/${canvasId}/chat`, { method: 'POST', body: JSON.stringify({ text }) }),
   addComment: (frameId: string, input: { selector: string; snippet: string; text: string }) =>
     req(`/api/frames/${frameId}/comments`, { method: 'POST', body: JSON.stringify(input) }),
+  /** a comment pinned to a point on the canvas (world coordinates on a page) rather than to an element */
+  addCanvasComment: (canvasId: string, input: { pageId: string; x: number; y: number; text: string }) =>
+    req(`/api/canvases/${canvasId}/comments`, { method: 'POST', body: JSON.stringify(input) }),
   replyComment: (commentId: string, text: string) =>
     req(`/api/comments/${commentId}/replies`, { method: 'POST', body: JSON.stringify({ text }) }),
   resolveComment: (commentId: string) => req(`/api/comments/${commentId}/resolve`, { method: 'POST' }),

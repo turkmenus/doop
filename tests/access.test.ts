@@ -189,6 +189,8 @@ describe('canvas access model', () => {
     const list = await (await invited.get('/api/canvases')).json()
     const entry = list.find((c: { id: string }) => c.id === canvasId)
     expect(entry?.shared).toBe(true)
+    /* the tile's avatar stack: owner first, then the invited member, by name */
+    expect(entry?.people.map((p: { name: string }) => p.name)).toEqual(['Owner', 'Invited'])
   })
 
   it('only the owner can flip link access; edit opens the canvas to everyone signed in', async () => {

@@ -14,6 +14,9 @@ const api = `http://localhost:${apiPort}`
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   test: {
+    /* agent worktrees live under .claude/ inside the repo; their copies of the
+       suite must not run as ours */
+    exclude: ['**/node_modules/**', '**/.claude/**'],
     setupFiles: ['tests/setup.ts'],
     globalSetup: ['tests/globalSetup.ts'],
     /* seven files drive a real Chromium; closing one under a full parallel

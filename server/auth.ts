@@ -500,7 +500,7 @@ function buildAuth() {
        so the gate's own default (matching, IdP-verified email) is what
        actually decides linking, as intended. */
     plugins: [
-      mcp({ loginPage: '/' }),
+      mcp({ loginPage: '/', oidcConfig: { loginPage: '/', consentPage: '/oauth/consent' } }),
       admin({ impersonationSessionDuration: 15 * 60 }),
       /* oneTimeToken: how a Google / Microsoft / SSO sign-in finished in the
          system browser reaches the desktop app (src/lib/desktopAuth.ts). The

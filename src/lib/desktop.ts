@@ -19,6 +19,7 @@ import {
   rememberPendingSignIn,
 } from './desktopAuth'
 import { isDesktopShell } from './shell'
+import { codexSetupTarget } from './codexConnection'
 
 export type CanvasTab = { id: string; name: string }
 
@@ -211,16 +212,22 @@ async function completeBrowserSignIn(urls: readonly string[]) {
   location.assign(link.to)
 }
 
-function listenForBrowserSignIn() {
+async function handleDesktopLinks(urls: readonly string[]) {
+  const setup = urls.map(codexSetupTarget).find((target) => target !== null)
+  if (setup) navigate(setup)
+  await completeBrowserSignIn(urls)
+}
+
+function listenForDesktopLinks() {
   const tauri = shellWindow.__TAURI__
   tauri?.event
-    ?.listen?.<string[]>('deep-link://new-url', (e) => void completeBrowserSignIn(e.payload).catch(console.error))
+    ?.listen?.<string[]>('deep-link://new-url', (e) => void handleDesktopLinks(e.payload).catch(console.error))
     .catch(console.error)
   /* the link that launched the app: the person quit doop while the browser
      was still busy, and the callback relaunched it */
   tauri?.deepLink
     ?.getCurrent?.()
-    .then((urls) => (urls ? completeBrowserSignIn(urls) : undefined))
+    .then((urls) => (urls ? handleDesktopLinks(urls) : undefined))
     .catch(console.error)
 }
 
@@ -244,7 +251,7 @@ export function initDesktopShell() {
      it as an event — the page never sees the keystroke. Windows has no menu
      bar, so Ctrl+W arrives as a plain keydown. Both close the active tab. */
   shellWindow.__TAURI__?.event?.listen?.('close-tab', closeActiveTab).catch(console.error)
-  listenForBrowserSignIn()
+  listenForDesktopLinks()
   document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() !== 'w' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return
     e.preventDefault()

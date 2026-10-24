@@ -6,6 +6,9 @@ lists every file in this folder.
 
 ## Active
 
+- [frame-versions.md](frame-versions.md) - Per-frame design history: burst-based snapshots of the
+  HTML a redesign, stream or restore replaced, the `frame_versions` table, REST + MCP restore, and
+  the history modal.
 - [chatgpt-app.md](chatgpt-app.md) - Doop as a ChatGPT app: what app review needs from `/mcp`
   (discovery, DCR, explicit tool annotations, profile tool), the inline preview card component
   (`server/chatgptApp.ts`), the "Claude Design for ChatGPT" marketing page, and the manual

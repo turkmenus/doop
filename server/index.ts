@@ -13,7 +13,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { toNodeHandler, fromNodeHeaders } from 'better-auth/node'
 import { oAuthDiscoveryMetadata } from 'better-auth/plugins'
 import { WebSocketServer, WebSocket } from 'ws'
-import { store } from './store.ts'
+import { PageLimitError, store } from './store.ts'
 import { getImage } from './previews.ts'
 import * as actions from './actions.ts'
 import { liveActivitiesRouter, logLiveActivityRequests, startLiveActivityDelivery } from './liveActivities.ts'
@@ -624,6 +624,54 @@ app.get('/api/me', async (req, res) => {
   })
 })
 
+/* Resolve the application from the consent code itself, never a client name or
+   id supplied by the page. Only the account authorizing the code may use it. */
+async function mcpConsent(code: string, userId: string) {
+  const [request] = await db.select().from(authSchema.verification).where(eq(authSchema.verification.identifier, code))
+  if (!request || request.expiresAt <= new Date()) return null
+  let value: { userId?: string; clientId?: string; requireConsent?: boolean } | null
+  try {
+    value = JSON.parse(request.value)
+  } catch {
+    return null
+  }
+  if (!value || value.userId !== userId || value.requireConsent !== true || typeof value.clientId !== 'string')
+    return null
+  const [client] = await db
+    .select()
+    .from(authSchema.oauthApplication)
+    .where(eq(authSchema.oauthApplication.clientId, value.clientId))
+  return client && !client.disabled ? { name: client.name } : null
+}
+
+app.get('/api/mcp-consent/:code', async (req, res, next) => {
+  try {
+    res.set('Cache-Control', 'no-store')
+    const client = await mcpConsent(req.params.code!, req.user!.id)
+    if (!client)
+      return res.status(404).json({ error: 'This connection request has expired. Start again from your agent.' })
+    res.json(client)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/mcp-consent/:code', async (req, res, next) => {
+  try {
+    res.set('Cache-Control', 'no-store')
+    if (typeof req.body?.accept !== 'boolean') return res.status(400).json({ error: 'Choose whether to connect.' })
+    if (!(await mcpConsent(req.params.code!, req.user!.id)))
+      return res.status(404).json({ error: 'This connection request has expired. Start again from your agent.' })
+    const result = await auth.api.oAuthConsent({
+      headers: fromNodeHeaders(req.headers),
+      body: { accept: req.body.accept, consent_code: req.params.code! },
+    })
+    res.json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
 /* Canvas access on the REST surface: resolve the canvas (or the frame's
    canvas) and run it through canAccessCanvas before touching anything.
    Both helpers write the error response themselves and return null. */
@@ -640,7 +688,7 @@ function requireCanvas(req: express.Request, res: express.Response, canvasId: st
   return c
 }
 
-function requireFrame(req: express.Request, res: express.Response, frameId: string) {
+function requireFrame(req: express.Request, res: express.Response, frameId: string, expectedUpdatedAt?: unknown) {
   const frame = store.getFrame(frameId)
   if (!frame) {
     res.status(404).json({ error: 'frame not found' })
@@ -650,6 +698,17 @@ function requireFrame(req: express.Request, res: express.Response, frameId: stri
   if (!c || !canAccessCanvas(req.user!.id, c)) {
     res.status(403).json({ error: 'this canvas is private — ask the owner for access' })
     return null
+  }
+  if (expectedUpdatedAt !== undefined) {
+    if (typeof expectedUpdatedAt !== 'number' || !Number.isSafeInteger(expectedUpdatedAt) || expectedUpdatedAt < 0) {
+      res.status(400).json({ error: 'expectedUpdatedAt must be a nonnegative integer' })
+      return null
+    }
+    // PATCH and DELETE mutate the store synchronously after this check.
+    if (frame.updatedAt !== expectedUpdatedAt) {
+      res.status(409).json({ error: 'The frame changed while you were editing. Please try again.', frame })
+      return null
+    }
   }
   return frame
 }
@@ -879,9 +938,22 @@ app.delete('/api/agent-keys/:id', async (req, res) => {
   res.json({ ok: true })
 })
 
-app.get('/api/canvases', (req, res) =>
+app.get('/api/canvases', async (req, res) => {
+  const list = workspaces.canvasesFor(req.user!.id)
+  /* the people on each canvas (owner first, then invited members) resolve
+     to names in one query — the home tiles wear them as an avatar stack */
+  const peopleIds = new Set<string>()
+  for (const c of list) for (const id of canvasPeopleIds(c.id)) peopleIds.add(id)
+  const names = new Map<string, string>()
+  if (peopleIds.size) {
+    const rows = await db
+      .select({ id: authSchema.user.id, name: authSchema.user.name })
+      .from(authSchema.user)
+      .where(inArray(authSchema.user.id, [...peopleIds]))
+    for (const r of rows) names.set(r.id, r.name)
+  }
   res.json(
-    workspaces.canvasesFor(req.user!.id).map((c) => {
+    list.map((c) => {
       /* which agents have worked on this canvas (most recent first), with
          the user whose token they connected under and when they last worked */
       const seen = new Map<string, { owner?: string; lastAt: number }>()
@@ -891,12 +963,20 @@ app.get('/api/canvases', (req, res) =>
       }
       return {
         ...c,
+        people: canvasPeopleIds(c.id).map((id) => ({ id, name: names.get(id) ?? 'Unknown' })),
         agents: [...seen].slice(0, 8).map(([name, v]) => ({ name, owner: v.owner, lastAt: v.lastAt })),
         activeTasks: activeAgentTasks(actions.getTasks(c.id)),
       }
     }),
-  ),
-)
+  )
+})
+
+/** owner first, then invited members, each once */
+function canvasPeopleIds(canvasId: string): string[] {
+  const c = store.getCanvas(canvasId)
+  if (!c) return []
+  return [...new Set([...(c.ownerId ? [c.ownerId] : []), ...(c.memberIds ?? [])])]
+}
 
 /* A workspace canvas needs membership and a workspace that may still grow —
    the 402 is what every client turns into the upgrade modal. */
@@ -1467,15 +1547,43 @@ app.put('/api/canvases/:id/pages', (req, res) => {
   res.json(clean)
 })
 
+app.post('/api/canvases/:id/pages/:pageId/duplicate', async (req, res) => {
+  const canvas = requireCanvas(req, res, req.params.id)
+  if (!canvas) return
+  if (!canvasPages(canvas).some((page) => page.id === req.params.pageId))
+    return res.status(404).json({ error: 'page not found' })
+  const actor = actions.resolveActor({ name: req.user!.name, kind: 'user' })
+  try {
+    const copy = await actions.duplicatePage(canvas.id, req.params.pageId, actor)
+    if (!copy) return res.status(404).json({ error: 'page not found' })
+    res.json({ page: copy.page, pages: copy.pages, frames: copy.frames })
+  } catch (e) {
+    if (e instanceof PageLimitError) return res.status(400).json({ error: e.message })
+    console.error('[pages] duplicate failed', e)
+    res.status(500).json({ error: 'Could not duplicate the page. Please try again.' })
+  }
+})
+
 app.post('/api/canvases/:id/frames', (req, res) => {
   if (!requireCanvas(req, res, req.params.id)) return
-  const { name, pageId, x, y, width, height, html } = req.body ?? {}
+  const { name, pageId, x, y, width, height, html, hidden, locked } = req.body ?? {}
   if (pageId !== undefined && !store.getCanvas(req.params.id)?.pages?.some((p) => p.id === pageId))
     return res.status(400).json({ error: 'page not found' })
   const actor = actions.resolveActor({ name: req.user!.name, kind: 'user' })
+  /* `hidden` and `locked` let undo bring a deleted frame back as it was */
   const frame = actions.createFrame(
     req.params.id,
-    { name: String(name || 'Frame'), pageId, x, y, width, height, html },
+    {
+      name: String(name || 'Frame'),
+      pageId,
+      x,
+      y,
+      width,
+      height,
+      html,
+      hidden: hidden === true,
+      locked: locked === true,
+    },
     actor,
   )
   if (!frame) return res.status(404).json({ error: 'canvas not found' })
@@ -1483,8 +1591,9 @@ app.post('/api/canvases/:id/frames', (req, res) => {
 })
 
 app.patch('/api/frames/:id', (req, res) => {
-  if (!requireFrame(req, res, req.params.id)) return
-  const { actor: _ignored, ...patch } = req.body ?? {}
+  const current = requireFrame(req, res, req.params.id, req.body?.expectedUpdatedAt)
+  if (!current) return
+  const { actor: _ignored, expectedUpdatedAt: _version, ...patch } = req.body ?? {}
   const actor = actions.resolveActor({ name: req.user!.name, kind: 'user' })
   if (
     patch.pageId !== undefined &&
@@ -1494,6 +1603,9 @@ app.patch('/api/frames/:id', (req, res) => {
   const allowed = ['name', 'pageId', 'x', 'y', 'width', 'height', 'html'] as const
   const clean: Record<string, unknown> = {}
   for (const k of allowed) if (patch[k] !== undefined) clean[k] = patch[k]
+  /* the eye in the Layers panel: anything but a literal true shows the frame */
+  if (patch.hidden !== undefined) clean.hidden = patch.hidden === true
+  if (patch.locked !== undefined) clean.locked = !!patch.locked
   const frame = actions.updateFrame(req.params.id, clean, actor)
   if (!frame) return res.status(404).json({ error: 'frame not found' })
   res.json(frame)
@@ -1512,11 +1624,35 @@ app.post('/api/frames/:id/append', (req, res) => {
 })
 
 app.delete('/api/frames/:id', (req, res) => {
-  if (!requireFrame(req, res, req.params.id)) return
+  if (!requireFrame(req, res, req.params.id, req.body?.expectedUpdatedAt)) return
   const actor = actions.resolveActor({ name: req.user!.name, kind: 'user' })
   const frame = actions.deleteFrame(req.params.id, actor)
   if (!frame) return res.status(404).json({ error: 'frame not found' })
   res.json({ ok: true })
+})
+
+/* design history: the states a frame had before later edits replaced them,
+   newest first and without HTML; one version in full; restore (same
+   permission model as editing — anyone with access to the canvas) */
+app.get('/api/frames/:id/versions', async (req, res) => {
+  if (!requireFrame(req, res, req.params.id)) return
+  res.json(await persist.listFrameVersions(req.params.id))
+})
+
+app.get('/api/frames/:id/versions/:versionId', async (req, res) => {
+  if (!requireFrame(req, res, req.params.id)) return
+  const version = await persist.getFrameVersion(req.params.id, req.params.versionId)
+  if (!version) return res.status(404).json({ error: 'version not found' })
+  res.json(version)
+})
+
+app.post('/api/frames/:id/versions/:versionId/restore', async (req, res) => {
+  if (!requireFrame(req, res, req.params.id)) return
+  const actor = actions.resolveActor({ name: req.user!.name, kind: 'user' })
+  const restored = await actions.restoreFrameVersion(req.params.id, req.params.versionId, actor)
+  if (restored === null) return res.status(404).json({ error: 'version not found' })
+  if (!restored) return res.status(404).json({ error: 'frame not found' })
+  res.json(restored)
 })
 
 app.post('/api/frames/:id/comments', async (req, res) => {
@@ -1537,6 +1673,44 @@ app.post('/api/frames/:id/comments', async (req, res) => {
     req.user!.id,
   )
   if (!comment) return res.status(404).json({ error: 'frame not found or empty text' })
+  res.json(comment)
+})
+
+/* a comment pinned to a point on the canvas (world coordinates on one of its
+   pages) rather than to an element — metered exactly like an element comment */
+app.post('/api/canvases/:id/comments', async (req, res) => {
+  const canvas = requireCanvas(req, res, req.params.id)
+  if (!canvas) return
+  const { pageId, x, y, text } = req.body ?? {}
+  if (typeof pageId !== 'string' || !canvasPages(canvas).some((page) => page.id === pageId)) {
+    return res.status(400).json({ error: 'page not found' })
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return res.status(400).json({ error: 'x and y must be numbers' })
+  const body = String(text ?? '')
+  if (!body.trim()) return res.status(400).json({ error: 'empty text' })
+  let gate: Awaited<ReturnType<typeof allowance.consumeResidentTask>> | undefined
+  if (mentionedRole(body)) {
+    gate = await allowance.consumeResidentTask(req.user!.id)
+    if (!gate.ok) {
+      return res.status(403).json({ error: 'resident_limit', used: gate.used, limit: gate.limit })
+    }
+  }
+  const comment = actions.addCanvasComment(
+    canvas.id,
+    { pageId, x: Number(x), y: Number(y), text: body },
+    req.user!.name,
+    req.user!.id,
+  )
+  if (!comment) {
+    /* the page went away while the meter was being written: give the task
+       back — a failed refund is logged, never turned into a 500 */
+    if (gate) {
+      await allowance.refundResidentTask(gate, req.user!.id).catch((err) => {
+        console.error(`[comments] could not refund a resident task for ${req.user!.id}:`, err)
+      })
+    }
+    return res.status(409).json({ error: 'page removed meanwhile' })
+  }
   res.json(comment)
 })
 
@@ -1722,27 +1896,6 @@ app.post('/api/canvases/:id/cards', async (req, res) => {
   res.json(card)
 })
 
-/* the canvas chat: a plain message is free; one that @mentions resident
-   agents queues a card for them and is metered like any other card */
-app.post('/api/canvases/:id/chat', async (req, res) => {
-  if (!requireCanvas(req, res, req.params.id)) return
-  /* the same cut addChatMessage applies, so a mention past the cap is
-     never metered for a card that then does not exist */
-  const text = String(req.body?.text ?? '')
-    .trim()
-    .slice(0, actions.MAX_CHAT_CHARS)
-  if (!text) return res.status(400).json({ error: 'empty text' })
-  if (mentionedRole(text)) {
-    const gate = await allowance.consumeResidentTask(req.user!.id)
-    if (!gate.ok) {
-      return res.status(403).json({ error: 'resident_limit', used: gate.used, limit: gate.limit })
-    }
-  }
-  const message = actions.addChatMessage(req.params.id, text, req.user!.name, req.user!.id)
-  if (!message) return res.status(404).json({ error: 'canvas not found or empty text' })
-  res.json(message)
-})
-
 app.post('/api/canvases/:canvasId/cards/:id/done', (req, res) => {
   if (!requireCanvas(req, res, req.params.canvasId)) return
   const card = actions.completeCard(req.params.canvasId, req.params.id)
@@ -1922,7 +2075,6 @@ wss.on('connection', (ws, upgradeReq) => {
         tasks: actions.getTasks(msg.canvasId),
         feedback: actions.getFeedback(msg.canvasId),
         comments: actions.getComments(msg.canvasId),
-        chat: actions.getChat(msg.canvasId),
         decisions: actions.getDecisions(msg.canvasId),
         proposals: actions.getProposals(msg.canvasId),
         selfColor: presence.color,

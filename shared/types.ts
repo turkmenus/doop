@@ -17,6 +17,32 @@ export interface Frame {
   /** product-made onboarding/example content (welcome demo, seeded frames) —
    *  not the user's work; agents must never read it as the canvas's style */
   demo?: boolean
+  /** hidden from the stage (the eye in the Layers panel); the frame keeps
+   *  its row, its HTML and its exports — only the canvas stops drawing it */
+  hidden?: boolean
+  /** Figma-style lock: the frame cannot be selected, moved, resized or
+   *  deleted from the stage until it is unlocked (Layers panel, Inspector,
+   *  ⌘⇧L, or an agent via update_frame) */
+  locked?: boolean
+}
+
+/** One entry of a frame's design history: the HTML (and size) the frame had
+ *  before a later burst of edits replaced it. The listing omits the HTML. */
+export interface FrameVersionInfo {
+  id: string
+  frameId: string
+  canvasId: string
+  width: number
+  height: number
+  /** who authored that state, and when it was last written */
+  savedBy: string
+  savedByKind?: ActorKind
+  savedAt: number
+  htmlBytes: number
+}
+
+export interface FrameVersion extends FrameVersionInfo {
+  html: string
 }
 
 export interface CanvasMeta {
@@ -35,6 +61,8 @@ export interface CanvasMeta {
   previewFrameId?: string
   /** agents that have worked on this canvas (most recent first) */
   agents?: { name: string; owner?: string; lastAt?: number }[]
+  /** the owner first, then everyone invited — the home tile's avatar stack */
+  people?: { id: string; name: string }[]
 }
 
 /** The dashboard/gallery preview render (`/i/<id>.jpg?preview`) clips a
@@ -382,17 +410,28 @@ export interface TaskFeedback {
   failureReason?: string
 }
 
-/** A comment pinned to a specific element inside a frame. Comments that
- *  mention @Doop are routed to the resident agent; others are notes for
- *  the humans in the room. */
+/** A comment pinned to a specific element inside a frame, or to a point on
+ *  the canvas itself. Comments that mention @Doop are routed to the resident
+ *  agent; others are notes for the humans in the room.
+ *
+ *  Two anchors: an element comment carries `frameId` + `selector` + `snippet`;
+ *  a canvas comment carries `pageId` + `x` + `y` (world coordinates) and no
+ *  `frameId`, with `selector` and `snippet` empty. `isCanvasComment` in
+ *  shared/comments.ts tells them apart. */
 export interface ElementComment {
   id: string
   canvasId: string
-  frameId: string
-  /** CSS selector of the anchored element, resolved at comment time */
+  /** the frame the element lives in; absent on a canvas comment */
+  frameId?: string
+  /** CSS selector of the anchored element, resolved at comment time ('' on a canvas comment) */
   selector: string
-  /** outerHTML excerpt of the element, for agent context and dead-anchor display */
+  /** outerHTML excerpt of the element, for agent context and dead-anchor display ('' on a canvas comment) */
   snippet: string
+  /** canvas comment: the page it sits on … */
+  pageId?: string
+  /** … and its world point on that page */
+  x?: number
+  y?: number
   from: string
   /** account id of the human who left it — decides which model credential runs it */
   fromUserId?: string
@@ -412,28 +451,6 @@ export interface ElementComment {
   /** set on a reply: the root comment of its thread. Replies inherit the
    *  root's anchor and are listed under its pin instead of getting their own */
   parentId?: string
-}
-
-/** One line in the canvas chat: a human or agent talking to the room. A
- *  message that @mentions resident agents also queues a board card for them
- *  (linked through `taskId`), so a request typed in the chat is assigned the
- *  moment it is sent, and the agents answer back in the same thread. */
-export interface ChatMessage {
-  id: string
-  canvasId: string
-  from: string
-  fromKind: ActorKind
-  /** account id of the human who wrote it — decides which model credential runs the card */
-  fromUserId?: string
-  color: string
-  text: string
-  at: number
-  /** role ids the text @mentions, in order — the pipeline of the queued card */
-  mentions?: string[]
-  /** the board card this message queued, when it addressed an agent */
-  taskId?: string
-  /** an agent's answer: the message it replies to */
-  replyToId?: string
 }
 
 export interface ActivityItem {
@@ -474,7 +491,6 @@ export type ServerMessage =
       tasks: AgentTask[]
       feedback: TaskFeedback[]
       comments: ElementComment[]
-      chat: ChatMessage[]
       decisions: DesignDecision[]
       proposals: MemoryProposal[]
       selfColor: string
@@ -490,7 +506,6 @@ export type ServerMessage =
   | { type: 'task'; task: AgentTask }
   | { type: 'feedback'; feedback: TaskFeedback }
   | { type: 'comment'; comment: ElementComment }
-  | { type: 'chat'; message: ChatMessage }
   | { type: 'frame:drag'; clientId: string; frameId: string; x: number; y: number; width: number; height: number }
   | { type: 'frame:created'; frame: Frame; actor: Actor }
   | { type: 'frame:updated'; frame: Frame; actor: Actor }

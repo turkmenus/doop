@@ -1,7 +1,26 @@
 import { nanoid } from 'nanoid'
-import { canvasPages, pageFrames } from '../shared/pages.ts'
+import { canvasPages, copyPageName, pageFrames, samePages } from '../shared/pages.ts'
 import * as persist from './db/persist.ts'
-import type { Canvas, CommunityCategory, Frame, GuidelineDoc, MemoryReference } from '../shared/types.ts'
+import type {
+  Canvas,
+  CanvasPageInfo,
+  CommunityCategory,
+  Frame,
+  GuidelineDoc,
+  MemoryReference,
+} from '../shared/types.ts'
+
+export const MAX_PAGES = 100
+
+export class PageLimitError extends Error {
+  constructor() {
+    super(`A canvas holds at most ${MAX_PAGES} pages.`)
+  }
+}
+
+type PageCopy = { source: CanvasPageInfo; page: CanvasPageInfo; pages: CanvasPageInfo[]; frames: Frame[] }
+
+const names = (pages: CanvasPageInfo[]) => pages.map((page) => page.name)
 
 /**
  * In-memory canvas/frame state — the hot path for reads, reveals and
@@ -11,6 +30,8 @@ import type { Canvas, CommunityCategory, Frame, GuidelineDoc, MemoryReference } 
 class Store {
   canvases = new Map<string, Canvas>()
   private frameIndex = new Map<string, string>() // frameId -> canvasId
+  /** the page copy in flight per canvas, so the next one waits for it */
+  private pageCopies = new Map<string, Promise<unknown>>()
 
   init(canvases: Canvas[]) {
     for (const c of canvases) {
@@ -160,6 +181,62 @@ class Store {
     this.canvases.set(canvas.id, canvas)
     for (const frame of frames) this.frameIndex.set(frame.id, canvas.id)
     return canvas
+  }
+
+  /** Copy a page and every frame on it (same names, geometry and html under
+   * fresh ids) into a new page right after the source, named "<source> copy"
+   * (numbered when that name is taken). Copies of one canvas run one after
+   * another so two at once cannot pick the same name or overshoot the page
+   * limit; memory changes only once the copy is durable, as with
+   * duplicateCanvas. Rejects with PageLimitError when the canvas is full. */
+  duplicatePage(canvasId: string, pageId: string, by: string): Promise<PageCopy | undefined> {
+    const previous = this.pageCopies.get(canvasId) ?? Promise.resolve()
+    const task = previous.then(
+      () => this.copyPage(canvasId, pageId, by),
+      () => this.copyPage(canvasId, pageId, by),
+    )
+    this.pageCopies.set(canvasId, task)
+    const release = () => {
+      if (this.pageCopies.get(canvasId) === task) this.pageCopies.delete(canvasId)
+    }
+    void task.then(release, release)
+    return task
+  }
+
+  private async copyPage(canvasId: string, pageId: string, by: string): Promise<PageCopy | undefined> {
+    const canvas = this.canvases.get(canvasId)
+    if (!canvas) return undefined
+    const pages = canvasPages(canvas)
+    const source = pages.find((page) => page.id === pageId)
+    if (!source) return undefined
+    if (pages.length >= MAX_PAGES) throw new PageLimitError()
+    const now = Date.now()
+    const page: CanvasPageInfo = { id: nanoid(10), name: copyPageName(source.name, names(pages)) }
+    const frames: Frame[] = pageFrames(canvas, pageId).map((frame) => ({
+      ...frame,
+      id: nanoid(10),
+      pageId: page.id,
+      createdAt: now,
+      updatedAt: now,
+      updatedBy: by,
+    }))
+    const next = [...pages]
+    next.splice(pages.indexOf(source) + 1, 0, page)
+    await persist.savePageCopy({ ...canvas, pages: next, updatedAt: now }, frames)
+    if (this.canvases.get(canvasId) !== canvas) return undefined
+    /* a page save may have landed during the write: slot the copy after the
+       source wherever it is now (or last, if the source is gone), under a
+       name the live list does not use */
+    const live = canvasPages(canvas)
+    if (names(live).includes(page.name)) page.name = copyPageName(source.name, names(live))
+    const at = live.findIndex((candidate) => candidate.id === pageId)
+    canvas.pages = [...live]
+    canvas.pages.splice(at === -1 ? live.length : at + 1, 0, page)
+    canvas.frames.push(...frames)
+    for (const frame of frames) this.frameIndex.set(frame.id, canvasId)
+    canvas.updatedAt = Math.max(canvas.updatedAt, now)
+    if (!samePages(canvas.pages, next)) persist.saveCanvas(canvas)
+    return { source, page, pages: canvas.pages, frames }
   }
 
   setPages(canvasId: string, pages: import('../shared/types.ts').CanvasPageInfo[]) {
@@ -436,6 +513,8 @@ class Store {
       height?: number
       html?: string
       demo?: boolean
+      hidden?: boolean
+      locked?: boolean
     },
     by: string,
   ): Frame | undefined {
@@ -468,6 +547,8 @@ class Store {
       updatedBy: by,
     }
     if (input.demo) frame.demo = true
+    if (input.hidden) frame.hidden = true
+    if (input.locked) frame.locked = true
     c.frames.push(frame)
     c.updatedAt = now
     this.frameIndex.set(frame.id, canvasId)
@@ -478,7 +559,7 @@ class Store {
 
   updateFrame(
     frameId: string,
-    patch: Partial<Pick<Frame, 'name' | 'pageId' | 'x' | 'y' | 'width' | 'height' | 'html'>>,
+    patch: Partial<Pick<Frame, 'name' | 'pageId' | 'x' | 'y' | 'width' | 'height' | 'html' | 'hidden' | 'locked'>>,
     by: string,
   ): Frame | undefined {
     const frame = this.getFrame(frameId)
@@ -489,7 +570,8 @@ class Store {
     )
       return undefined
     Object.assign(frame, patch)
-    frame.updatedAt = Date.now()
+    // Also serves as the optimistic-save version, including writes in the same millisecond.
+    frame.updatedAt = Math.max(Date.now(), frame.updatedAt + 1)
     frame.updatedBy = by
     const c = this.canvases.get(frame.canvasId)!
     c.updatedAt = frame.updatedAt

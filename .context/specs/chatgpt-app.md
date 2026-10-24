@@ -129,9 +129,21 @@ see no difference.
   comparison table, connect steps), a ChatGPT section in `/docs/get-started#chatgpt`, docs nav
   and sitemap entries. The product server's proxy allowlist (`server/marketing.ts`) passes the
   new path through.
-- The in-app Connect modal's ChatGPT entry (`src/components/ConnectModal.tsx`) already documents
-  the Developer-mode connector path; once the directory listing is live its first step should
-  become "find Doop in the app directory".
+- The in-app Connect modal's ChatGPT entry (`src/components/ConnectModal.tsx`) opens
+  `https://chatgpt.com/plugins` with **Add to ChatGPT**, supplies a copyable instance `/mcp`
+  URL, and guides **+ → Add custom MCP server → OAuth → Create as a plugin**, sign-in,
+  installation and `@Doop` in a new chat. No file download is needed. This follows OpenAI's
+  [connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt), checked
+  2026-10-16. Account/workspace policy controls custom-server access.
+- The setup link does not prefill the server URL: no arbitrary-server prefill link is documented.
+  This repo has no verified published Doop plugin ID. Replace the setup link with the actual
+  directory listing only once one is published; do not derive an ID from the package name.
+- The public-URL flow filters HTTP and common local/private addresses. Those instances show
+  guidance to open a public HTTPS instance or configure Secure MCP Tunnel instead. Claude and
+  ChatGPT share `src/lib/mcpConnection.ts`: private-IP checks apply only to literal addresses,
+  so numeric-leading public DNS names and public IPv6 remain available. Dialog tests cover
+  these forms, including public/private IPv4-mapped IPv6. A hostname passing the filter is not
+  proof of public reachability; ChatGPT checks the real connection.
 
 ## The plugin package (`chatgpt-plugin/`)
 
@@ -155,9 +167,9 @@ the package; the dashboard rejects them.
    `hello@doop.design`. Review the privacy page against the checklist: data categories, purposes,
    recipients, retention, user controls.
 5. Test account: a fully featured demo account with sample canvases, password sign-in, no 2FA.
-6. Test in Developer mode first (Settings → Connectors → Advanced): connect, run a brief, check
-   that the preview card renders, that "Open in Doop" opens the canvas, and that a revoked token
-   re-triggers the sign-in.
+6. Test through [ChatGPT Plugins](https://chatgpt.com/plugins) first (**+ → Add custom MCP server**):
+   connect, install the resulting plugin, run a brief, check that the preview card renders,
+   that "Open in Doop" opens the canvas, and that a revoked token re-triggers the sign-in.
 7. Submit. Annotation justifications are no longer required; appeal if automated review flags one.
 
 Example prompts for the listing:

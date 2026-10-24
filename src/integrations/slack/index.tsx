@@ -2,9 +2,9 @@ import { useState } from 'react'
 import type { ClientIntegration, SettingsCardProps } from '../index'
 import { ApiError, req, type IntegrationsStatus } from '../../lib/api'
 import { Button } from '../../components/ui/button'
+import { Note } from '../../components/ui/note'
 import { DisconnectButton, IntegrationCard } from '../ui'
-import slackLogo from './logo.svg'
-import { cn } from '@/lib/utils'
+import { BrandMark } from '@/components/ui/brand-mark'
 
 interface SlackStatus {
   connected: boolean
@@ -18,20 +18,7 @@ function statusOf(status: IntegrationsStatus): SlackStatus {
 }
 
 function SlackTile({ size = 24, className }: { size?: number; className?: string }) {
-  return (
-    <span
-      aria-hidden
-      className={cn('inline-grid flex-none place-items-center', className)}
-      style={{
-        width: size,
-        height: size,
-        borderRadius: Math.round(size * 0.29),
-        background: '#4A154B',
-      }}
-    >
-      <img src={slackLogo} alt="" width={Math.round(size * 0.55)} height={Math.round(size * 0.55)} />
-    </span>
-  )
+  return <BrandMark brand="slack" size={size} className={className} />
 }
 
 function SlackSettingsCard({ status, busy, setBusy, requestDisconnect }: SettingsCardProps) {
@@ -79,9 +66,9 @@ function SlackSettingsCard({ status, busy, setBusy, requestDisconnect }: Setting
       }
     >
       {error && (
-        <p role="alert" className="text-[11.5px] text-accent-ink">
+        <Note role="alert" tone="error">
           {error}
-        </p>
+        </Note>
       )}
     </IntegrationCard>
   )

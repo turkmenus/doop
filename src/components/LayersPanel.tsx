@@ -11,8 +11,9 @@ import {
 import type { Frame } from '../../shared/types'
 import { useStore } from '../lib/store'
 import { usePageCanvas } from '../lib/pages'
-import { PagesPanel } from './PagesPanel'
+import { PagesPanel, sectionHeading } from './PagesPanel'
 import { getIdentity } from '../lib/identity'
+import { copyElementLink } from '../lib/elementLink'
 import { deleteFramesTracked } from '../lib/history'
 import {
   ancestorsOf,
@@ -24,12 +25,22 @@ import {
   type DropTarget,
   type LayerNode,
 } from '../lib/layers'
-import { deleteLayer, dropLayer, duplicateLayer, shiftLayer } from '../lib/layerEdits'
+import {
+  deleteLayer,
+  dropLayer,
+  duplicateLayer,
+  setFrameHidden,
+  setFramesLocked,
+  setLayerHidden,
+  setLayerLocked,
+  shiftLayer,
+} from '../lib/layerEdits'
+import { MOD_KEY } from '../lib/keys'
 import { cn } from '@/lib/utils'
 import { AgentIcon } from './AgentIcon'
 import { LayerKindIcon } from './LayerKindIcon'
 import { FrameContextMenu } from './FrameContextMenu'
-import { Panel, PanelBody, PanelHeader, PanelTabsRoot, PanelTabs, PanelTab, PanelTabPanel } from './ui/panel'
+import { Panel, PanelBody, PanelClose, PanelHeader } from './ui/panel'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Tooltip } from './ui/tooltip'
@@ -45,20 +56,23 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   CollapseAllIcon,
+  EyeClosedIcon,
+  EyeIcon,
   FrameIcon,
   LayersIcon,
+  LockIcon,
   PanelCollapseIcon,
   PanelExpandIcon,
   PlusIcon,
   SearchIcon,
 } from './ui/icons'
 
-/* the tree indents 18px per level; frame rows sit at depth 0 */
-const INDENT = 18
+/* the tree indents 16px per level; frame rows sit at depth 0 */
+const INDENT = 16
 
-const railBtn = 'shrink-0 text-ink-faint hover:bg-paper-deep hover:text-ink'
 const sectionBtn = 'size-5 rounded-[5px] text-ink-faint hover:bg-paper-deep hover:text-ink'
-const editorChip = 'inline-flex flex-none items-center gap-[3px] rounded-full px-1.5 text-[9.5px] font-bold text-white'
+const editorChip =
+  'inline-flex h-4 flex-none items-center gap-[3px] rounded-full px-1.5 text-[10px] font-medium leading-none text-white'
 
 function rowKey(frameId: string, selector: string) {
   return `${frameId}|${selector}`
@@ -77,10 +91,21 @@ function frameTree(frame: Frame): LayerNode[] {
 }
 
 /** One visible line of the tree. The list is flat so the arrow keys can walk
- *  it, and every element row knows its parent for ←. */
+ *  it, and every element row knows its parent for ← — and whether something
+ *  above it is hidden, since a hidden box takes its contents with it. */
 type VisibleRow =
   | { kind: 'frame'; key: string; frame: Frame; open: boolean; empty: boolean }
-  | { kind: 'node'; key: string; frame: Frame; node: LayerNode; depth: number; open: boolean; parentKey: string }
+  | {
+      kind: 'node'
+      key: string
+      frame: Frame
+      node: LayerNode
+      depth: number
+      open: boolean
+      parentKey: string
+      /** the frame or an ancestor element is hidden */
+      dim: boolean
+    }
 type NodeVisibleRow = Extract<VisibleRow, { kind: 'node' }>
 
 /* a press has to travel this far before it is a drag rather than a click */
@@ -118,15 +143,15 @@ function visibleRows(frames: Frame[], query: string, expanded: Set<string>): Vis
     const open = !!query || expanded.has(frame.id)
     const nodes = open ? (tree ?? frameTree(frame)) : []
     rows.push({ kind: 'frame', key: frame.id, frame, open, empty: open && nodes.length === 0 })
-    const walk = (list: LayerNode[], depth: number, parentKey: string) => {
+    const walk = (list: LayerNode[], depth: number, parentKey: string, dim: boolean) => {
       for (const node of list) {
         const key = rowKey(frame.id, node.selector)
         const nodeOpen = node.children.length > 0 && (!!query || expanded.has(key))
-        rows.push({ kind: 'node', key, frame, node, depth, open: nodeOpen, parentKey })
-        if (nodeOpen) walk(node.children, depth + 1, key)
+        rows.push({ kind: 'node', key, frame, node, depth, open: nodeOpen, parentKey, dim })
+        if (nodeOpen) walk(node.children, depth + 1, key, dim || node.hidden)
       }
     }
-    walk(nodes, 1, frame.id)
+    walk(nodes, 1, frame.id, !!frame.hidden)
   }
   return rows
 }
@@ -134,13 +159,24 @@ function visibleRows(frames: Frame[], query: string, expanded: Set<string>): Vis
 /** The Layers rail: every frame on the canvas, opening into the element tree
  *  of its HTML. Selection runs both ways — a row selects the element in the
  *  frame, a click in the frame highlights its row. */
-export function LayersPanel({ onAddFrame }: { onAddFrame: () => void }) {
+export function LayersPanel({
+  onAddFrame,
+  surface = 'floating',
+  onClose,
+}: {
+  onAddFrame: () => void
+  /* 'inline' when the panel is filling a mobile Sheet rather than floating */
+  surface?: 'floating' | 'inline'
+  /** inline only: the sheet's close, in the collapse control's place */
+  onClose?: () => void
+}) {
+  /* a row's pointerleave never fires if the panel goes away under it */
+  useEffect(() => () => useStore.getState().setHoveredLayer(null), [])
   const pageCanvas = usePageCanvas()
   const frames = useMemo(() => pageCanvas?.frames ?? [], [pageCanvas])
   const selectedId = useStore((s) => s.selectedId)
   const selectedElement = useStore((s) => s.selectedElement)
   const setLayersOpen = useStore((s) => s.setLayersOpen)
-  const [tab, setTab] = useState('frames')
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   /* the row being dragged and where it would land; the pointer handlers are
@@ -298,8 +334,10 @@ export function LayersPanel({ onAddFrame }: { onAddFrame: () => void }) {
         /* a held key repeats: once the element is gone the frame row would
            be next, so only the first press deletes */
         if (e.repeat) break
-        if (row?.kind === 'frame') deleteFramesTracked([row.frame])
-        else if (row) deleteLayer(row.frame, row.node.selector)
+        /* a locked frame stays (deleteLayer refuses a locked element itself) */
+        if (row?.kind === 'frame') {
+          if (!row.frame.locked) deleteFramesTracked([row.frame])
+        } else if (row) deleteLayer(row.frame, row.node.selector)
         break
       default:
         return
@@ -311,166 +349,146 @@ export function LayersPanel({ onAddFrame }: { onAddFrame: () => void }) {
   }
 
   return (
-    <Panel className="left-3 inset-y-3 w-[300px]">
-      <PanelTabsRoot value={tab} onValueChange={setTab}>
-        <PanelHeader>
-          <PanelTabs aria-label="Canvas organization">
-            <PanelTab value="frames">Frames</PanelTab>
-            <PanelTab value="pages">Pages</PanelTab>
-          </PanelTabs>
+    <Panel surface={surface} className={cn(surface === 'floating' && 'top-2.5 bottom-3.5 left-3.5 w-[264px]')}>
+      {/* the panel's name with its icon, the collapse control at the far end */}
+      <PanelHeader className="h-10 pl-3.5">
+        <span className="flex items-center gap-2">
+          <LayersIcon className="size-3.5" />
+          Layers
+        </span>
+        {surface === 'inline' ? (
+          <PanelClose label="Close" onClick={onClose} />
+        ) : (
           <Tooltip label="Collapse panel" side="bottom" align="end">
             <Button
               variant="bare"
               size="icon-sm"
-              className={railBtn}
+              className="size-7 shrink-0 rounded-[7px] text-ink-faint hover:bg-paper-deep hover:text-ink"
               aria-label="Collapse panel"
               onClick={() => setLayersOpen(false)}
             >
-              <PanelCollapseIcon width={13} height={13} />
+              <PanelCollapseIcon className="size-3.5" />
             </Button>
           </Tooltip>
-        </PanelHeader>
-        <PanelTabPanel value="pages">
-          <PagesPanel fill />
-        </PanelTabPanel>
-        <PanelTabPanel value="frames">
-          <label className="mx-3 mt-2.5 mb-1 flex h-8 items-center gap-2 rounded-lg border border-line bg-paper px-2.5 text-ink-faint focus-within:border-ink">
-            <SearchIcon width={13} height={13} className="flex-none" />
-            <Input
+        )}
+      </PanelHeader>
+      {/* Figma's order: the pages at the top, the frames of the active page
+          under them, the search at the bottom within thumb's reach */}
+      <PagesPanel />
+      <div className={cn('mt-1.5 flex h-6 flex-none items-center justify-between pr-2.5 pl-3.5', sectionHeading)}>
+        <span data-slot="frame-section-heading" className={sectionHeading}>
+          Layers
+        </span>
+        <span className="flex gap-1">
+          <Tooltip label="Collapse all" side="bottom">
+            <Button
               variant="bare"
-              inputSize="auto"
-              className="h-full text-[12.5px] md:text-[12.5px]"
-              placeholder="Search layers"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
-          <div className="flex items-center justify-between py-1 pr-2 pl-3.5 font-mono text-[10px] font-medium uppercase tracking-[0.12em] text-ink-faint">
-            <span data-slot="frame-section-heading">Frames · {frames.length}</span>
-            <span className="flex gap-0.5">
-              <Tooltip label="Collapse all" side="bottom">
-                <Button
-                  variant="bare"
-                  size="icon-sm"
-                  className={sectionBtn}
-                  aria-label="Collapse all"
-                  onClick={() => setExpanded(new Set())}
-                >
-                  <CollapseAllIcon width={12} height={12} />
-                </Button>
-              </Tooltip>
-              <Tooltip label="New frame" side="bottom" align="end">
-                <Button
-                  variant="bare"
-                  size="icon-sm"
-                  className={sectionBtn}
-                  aria-label="New frame"
-                  onClick={onAddFrame}
-                >
-                  <PlusIcon width={12} height={12} />
-                </Button>
-              </Tooltip>
-            </span>
+              size="icon-sm"
+              className={sectionBtn}
+              aria-label="Collapse all"
+              onClick={() => setExpanded(new Set())}
+            >
+              <CollapseAllIcon className="size-3.5" />
+            </Button>
+          </Tooltip>
+          <Tooltip label="New frame" side="bottom" align="end">
+            <Button variant="bare" size="icon-sm" className={sectionBtn} aria-label="New frame" onClick={onAddFrame}>
+              <PlusIcon className="size-3.5" />
+            </Button>
+          </Tooltip>
+        </span>
+      </div>
+      <PanelBody
+        className={cn('px-2 pb-2 outline-none', drag && 'cursor-grabbing')}
+        role="tree"
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        onClickCapture={(e) => {
+          if (!didDrag.current) return
+          didDrag.current = false
+          e.stopPropagation()
+        }}
+      >
+        {frames.length === 0 && (
+          <div className="px-3 py-6 text-center text-[12px] text-ink-faint">
+            No frames yet. Press + to add one, or ask the agent for a design.
           </div>
-          <PanelBody
-            className={cn('px-2 pb-2 outline-none', drag && 'cursor-grabbing')}
-            role="tree"
-            tabIndex={0}
-            onKeyDown={onKeyDown}
-            onClickCapture={(e) => {
-              if (!didDrag.current) return
-              didDrag.current = false
-              e.stopPropagation()
-            }}
-          >
-            {frames.length === 0 && (
-              <div className="px-3 py-6 text-center text-[12.5px] text-ink-faint">
-                No frames yet. Press + to add one, or ask the agent for a design.
-              </div>
-            )}
-            {frames.length > 0 && rows.length === 0 && (
-              <div className="px-3 py-6 text-center text-[12.5px] text-ink-faint">
-                Nothing matches “{query.trim()}”.
-              </div>
-            )}
-            {rows.map((row) =>
-              row.kind === 'frame' ? (
-                <FrameRow
-                  key={row.key}
-                  row={row}
-                  selected={row.frame.id === selectedId && !selectedElement}
-                  current={row.frame.id === selectedId}
-                  drop={drop?.key === row.key ? drop.place : undefined}
-                  onToggle={() => setOpen(row.key, !row.open)}
-                  onActivate={() => activate(row)}
-                />
-              ) : (
-                <NodeRow
-                  key={row.key}
-                  row={row}
-                  selected={row.key === currentKey}
-                  dragging={drag?.key === row.key}
-                  drop={drop?.key === row.key ? drop.place : undefined}
-                  onToggle={() => setOpen(row.key, !row.open)}
-                  onActivate={() => activate(row)}
-                  onPointerDown={(e) => onRowPointerDown(e, row)}
-                />
-              ),
-            )}
-          </PanelBody>
-          <footer className="flex flex-none items-center justify-between gap-2 whitespace-nowrap border-t border-line-soft px-3 py-[9px] font-mono text-[10px] tracking-[0.04em] text-ink-faint">
-            <span>
-              <Kbd>↑</Kbd>
-              <Kbd>↓</Kbd> move · <Kbd>⌥↑</Kbd>
-              <Kbd>⌥↓</Kbd> reorder · <Kbd>←</Kbd>
-              <Kbd>→</Kbd> fold
-            </span>
-            <span>
-              <Kbd>↵</Kbd> fly to frame
-            </span>
-          </footer>
-        </PanelTabPanel>
-      </PanelTabsRoot>
+        )}
+        {frames.length > 0 && rows.length === 0 && (
+          <div className="px-3 py-6 text-center text-[12px] text-ink-faint">Nothing matches “{query.trim()}”.</div>
+        )}
+        {rows.map((row) =>
+          row.kind === 'frame' ? (
+            <FrameRow
+              key={row.key}
+              row={row}
+              selected={row.frame.id === selectedId && !selectedElement}
+              current={row.frame.id === selectedId}
+              drop={drop?.key === row.key ? drop.place : undefined}
+              onToggle={() => setOpen(row.key, !row.open)}
+              onActivate={() => activate(row)}
+            />
+          ) : (
+            <NodeRow
+              key={row.key}
+              row={row}
+              selected={row.key === currentKey}
+              dragging={drag?.key === row.key}
+              drop={drop?.key === row.key ? drop.place : undefined}
+              onToggle={() => setOpen(row.key, !row.open)}
+              onActivate={() => activate(row)}
+              onPointerDown={(e) => onRowPointerDown(e, row)}
+            />
+          ),
+        )}
+      </PanelBody>
+      <footer className="flex-none px-2.5 pt-1 pb-2.5">
+        <label className="flex h-[30px] items-center gap-2 rounded-[8px] px-2.5 text-ink-faint shadow-ring focus-within:shadow-elevation-1-focus">
+          <SearchIcon className="size-3.5 flex-none" />
+          <Input
+            variant="bare"
+            inputSize="auto"
+            className="h-full text-[12px] placeholder:text-ink-ghost md:text-[12px]"
+            placeholder="Search layers"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
+      </footer>
     </Panel>
   )
 }
 
 /** The collapsed rail: a narrow column at the panel's spot with the expand
- *  control and the Layers mark carrying the frame count, as in the design. */
+ *  control and the Layers mark. The frame count lives in the tooltip only. */
 export function LayersRailToggle() {
   const setLayersOpen = useStore((s) => s.setLayersOpen)
   const count = usePageCanvas()?.frames.length ?? 0
   return (
     <nav
       aria-label="Layers panel"
-      className="absolute left-3 top-3 z-[35] flex w-12 flex-col items-center gap-1.5 rounded-[14px] border border-line bg-surface p-1.5 shadow-card"
+      className="pointer-events-auto absolute top-2.5 left-3.5 z-[35] flex w-10 flex-col items-center gap-0.5 rounded-[12px] bg-surface p-[5px] shadow-float"
     >
       <Tooltip label="Expand panel" side="right">
         <Button
           variant="bare"
           size="icon-sm"
-          className="size-[34px] rounded-lg text-ink-soft hover:bg-paper-deep hover:text-ink"
+          className="size-7 rounded-[7px] text-ink-soft hover:bg-paper-deep hover:text-ink"
           aria-label="Expand panel"
           onClick={() => setLayersOpen(true)}
         >
-          <PanelExpandIcon width={16} height={16} />
+          <PanelExpandIcon className="size-3.5" />
         </Button>
       </Tooltip>
-      <span className="my-0.5 h-px w-6 bg-line-soft" />
       <Tooltip label={`Layers · ${count} ${count === 1 ? 'frame' : 'frames'}`} side="right">
         <Button
           variant="bare"
           size="icon-sm"
-          className="relative size-[34px] rounded-lg bg-brand/[0.06] text-brand hover:bg-brand/10 hover:text-brand"
+          className="size-7 rounded-[7px] text-ink hover:bg-paper-deep"
           aria-label={`Layers — ${count} frames`}
           onClick={() => setLayersOpen(true)}
         >
-          <LayersIcon width={16} height={16} />
-          {count > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 grid h-[15px] min-w-[15px] place-items-center rounded-lg border-2 border-surface bg-brand px-[3px] font-mono text-[8px] font-medium text-white">
-              {count}
-            </span>
-          )}
+          <LayersIcon className="size-3.5" />
         </Button>
       </Tooltip>
     </nav>
@@ -512,10 +530,15 @@ function FrameRow({
             drop={drop}
             caret={<Caret open={row.open} present />}
             onCaret={onToggle}
-            icon={<FrameIcon width={13} height={13} />}
+            icon={<FrameIcon className="size-3.5" />}
             label={frame.name}
-            className={cn('font-semibold', current && !selected && 'text-brand [&_[data-icon]]:text-brand')}
+            className={cn(current && !selected && 'text-ink')}
             selected={selected}
+            hidden={!!frame.hidden}
+            dimmed={!!frame.hidden}
+            onToggleHidden={() => setFrameHidden(frame, !frame.hidden)}
+            locked={!!frame.locked}
+            onToggleLocked={() => setFramesLocked([frame], !frame.locked)}
             onClick={onActivate}
             onDoubleClick={() => useStore.getState().requestFlyTo(frame.id)}
             onContextMenu={() => {
@@ -530,11 +553,15 @@ function FrameRow({
                     designing…
                   </span>
                 )}
+                {/* who else is in the frame right now: a colour dot each, no
+                    names — the presence pill in the bar says who is who */}
                 {editors.map((p) => (
-                  <span key={p.clientId} className={editorChip} style={{ background: p.color }}>
-                    {p.kind === 'agent' ? <AgentIcon name={p.name} size={8} color="#fff" /> : '✎'}
-                    {p.name}
-                  </span>
+                  <span
+                    key={p.clientId}
+                    title={p.name}
+                    className="size-2 flex-none rounded-full"
+                    style={{ background: p.color }}
+                  />
                 ))}
               </>
             }
@@ -542,7 +569,7 @@ function FrameRow({
         </ContextMenuTrigger>
         <FrameContextMenu frame={frame} at={pasteAt} />
       </ContextMenu>
-      {row.empty && <div className="py-1 pl-[42px] text-[11.5px] text-ink-faint">empty frame</div>}
+      {row.empty && <div className="py-1 pl-[46px] text-[11px] text-ink-faint">empty frame</div>}
     </>
   )
 }
@@ -579,13 +606,31 @@ function NodeRow({
           label={node.label}
           detail={node.detail}
           selected={selected}
+          hidden={node.hidden}
+          dimmed={row.dim || node.hidden}
+          onToggleHidden={() => setLayerHidden(frame, node.selector, !node.hidden)}
+          locked={node.locked}
+          onToggleLocked={() => setLayerLocked(frame, node.selector, !node.locked)}
           className={cn(dragging && 'opacity-40')}
           onClick={onActivate}
           onContextMenu={onActivate}
           onPointerDown={onPointerDown}
+          /* the row under the pointer is outlined on the canvas too, as a
+             hover over the frame itself would */
+          onPointerEnter={() => useStore.getState().setHoveredLayer({ frameId: frame.id, selector: node.selector })}
+          onPointerLeave={() => {
+            const s = useStore.getState()
+            if (s.hoveredLayer?.frameId === frame.id && s.hoveredLayer.selector === node.selector)
+              s.setHoveredLayer(null)
+          }}
         />
       </ContextMenuTrigger>
       <ContextMenuContent>
+        <ContextMenuItem onSelect={() => setLayerHidden(frame, node.selector, !node.hidden)}>
+          {node.hidden ? 'Show' : 'Hide'}
+          <MenuHint>{MOD_KEY}⇧H</MenuHint>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuItem
           onSelect={() => {
             const html = elementHtml(frame.html, node.selector)
@@ -596,6 +641,9 @@ function NodeRow({
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => navigator.clipboard.writeText(node.selector).catch(console.error)}>
           Copy selector
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => void copyElementLink(frame, node.selector)}>
+          Copy link to element
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => duplicateLayer(frame, node.selector)}>Duplicate</ContextMenuItem>
         <ContextMenuSeparator />
@@ -608,7 +656,12 @@ function NodeRow({
           <MenuHint>⌥↓</MenuHint>
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem tone="danger" onSelect={() => deleteLayer(frame, node.selector)}>
+        <ContextMenuItem onSelect={() => setLayerLocked(frame, node.selector, !node.locked)}>
+          {node.locked ? 'Unlock' : 'Lock'}
+          <MenuHint>⌘⇧L</MenuHint>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem tone="danger" disabled={node.locked} onSelect={() => deleteLayer(frame, node.selector)}>
           Delete element
           <MenuHint>⌫</MenuHint>
         </ContextMenuItem>
@@ -631,6 +684,16 @@ type RowProps = Omit<HTMLAttributes<HTMLDivElement>, 'onClick'> & {
   /** where a dragged layer would land on this row */
   drop?: DropPlace
   trailing?: ReactNode
+  /** switched off by its own eye: the crossed eye stays, hover or not */
+  hidden?: boolean
+  /** faded: this row, or something above it, is hidden */
+  dimmed?: boolean
+  /** the eye at the row's right end; it shows on hover, and stays while hidden */
+  onToggleHidden?: () => void
+  /** locked by its own lock: the solid lock stays, hover or not */
+  locked?: boolean
+  /** the lock next to the eye; it shows on hover, and stays while locked */
+  onToggleLocked?: () => void
   onClick: () => void
 }
 
@@ -645,6 +708,11 @@ function Row({
   drop,
   className,
   trailing,
+  hidden,
+  dimmed,
+  onToggleHidden,
+  locked,
+  onToggleLocked,
   onClick,
   ...rest
 }: RowProps) {
@@ -660,9 +728,12 @@ function Row({
       role="treeitem"
       aria-selected={selected}
       className={cn(
-        'relative flex h-[26px] cursor-default select-none items-center gap-1 whitespace-nowrap rounded-md pr-1.5 text-[12.5px] text-ink hover:bg-paper-deep',
-        selected && 'bg-brand text-white hover:bg-brand [&_[data-icon]]:text-white/85',
-        drop === 'inside' && 'shadow-[inset_0_0_0_2px_var(--brand)]',
+        'group relative flex h-7 cursor-default select-none items-center gap-[5px] whitespace-nowrap rounded-[7px] pr-1.5 text-[12px] text-ink-soft hover:bg-sub',
+        selected && 'bg-paper-deep font-medium text-ink hover:bg-paper-deep [&_[data-icon]]:text-ink',
+        /* room under the floating eye and lock, so the name never runs beneath them */
+        (onToggleHidden || onToggleLocked) &&
+          (hidden || locked ? 'pr-[50px]' : 'focus-within:pr-[50px] hover:pr-[50px]'),
+        drop === 'inside' && 'shadow-[inset_0_0_0_1.5px_var(--brand)]',
         className,
       )}
       style={{ ...rest.style, paddingLeft: 6 + depth * INDENT }}
@@ -680,7 +751,7 @@ function Row({
       )}
       <span
         data-icon
-        className={cn('grid size-3.5 flex-none place-items-center text-ink-faint', onCaret && 'cursor-pointer')}
+        className={cn('grid size-3 flex-none place-items-center text-ink-faint', onCaret && 'cursor-pointer')}
         onClick={(e) => {
           if (!onCaret) return
           e.stopPropagation()
@@ -689,27 +760,97 @@ function Row({
       >
         {caret}
       </span>
-      <span data-icon className="grid size-4 flex-none place-items-center text-ink-faint">
+      <span data-icon className={cn('grid size-4 flex-none place-items-center text-ink-faint', dimmed && 'opacity-50')}>
         {icon}
       </span>
-      <span className="min-w-0 flex-1 overflow-hidden text-ellipsis">
-        {label}
-        {detail && <span className={cn('text-ink-faint', selected && 'text-white/85')}>{detail}</span>}
-      </span>
+      <span className={cn('min-w-0 flex-1 overflow-hidden text-ellipsis', dimmed && 'opacity-50')}>{label}</span>
+      {/* the class or id that names the element, as a quiet right-hand tag */}
+      {detail && (
+        <span className="min-w-0 max-w-[45%] flex-none truncate text-[11px] font-normal text-ink-faint group-hover:hidden">
+          {detail.replace(/^\./, '')}
+        </span>
+      )}
       {trailing && <span className="flex flex-none items-center gap-1">{trailing}</span>}
+      {(onToggleHidden || onToggleLocked) && (
+        /* the eye and lock float over the row's right end, outside the flex
+           flow, so showing or hiding them never moves anything: the row keeps
+           its layout and an open tooltip keeps its anchor while it closes.
+           They toggle visibility rather than display, for the same reason;
+           a hidden or locked row keeps its mark showing. */
+        <span
+          className={cn(
+            'absolute top-0 right-0 flex h-full flex-none items-center gap-0.5 rounded-r-[7px] bg-inherit pr-1.5 pl-1',
+            !hidden && !locked && 'invisible group-focus-within:visible group-hover:visible',
+          )}
+        >
+          {onToggleHidden && (
+            <RowToggle
+              label={hidden ? 'Show' : 'Hide'}
+              on={!!hidden}
+              selected={selected}
+              onToggle={onToggleHidden}
+              icon={hidden ? <EyeClosedIcon className="size-3.5" /> : <EyeIcon className="size-3.5" />}
+            />
+          )}
+          {onToggleLocked && (
+            <RowToggle
+              label={locked ? 'Unlock' : 'Lock'}
+              on={!!locked}
+              selected={selected}
+              onToggle={onToggleLocked}
+              icon={<LockIcon className="size-3" />}
+            />
+          )}
+        </span>
+      )}
     </div>
+  )
+}
+
+/** A row-end control (the eye, the lock): faint on hover, solid while on.
+ *  It is its own control: no select, no drag, no fly-to — and ↵/space on it
+ *  must press the button, not reach the tree, whose ↵ handler would cancel
+ *  the press and fly to the frame. */
+function RowToggle({
+  label,
+  on,
+  selected,
+  icon,
+  onToggle,
+}: {
+  label: string
+  on: boolean
+  selected: boolean
+  icon: ReactNode
+  onToggle: () => void
+}) {
+  /* no tooltip: the icon says it, and a bubble on every row-end hover is noise */
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={on}
+      className={cn(
+        'grid size-5 flex-none place-items-center rounded-[5px] text-ink-faint opacity-0 hover:bg-ink/10 hover:text-ink focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100',
+        on && 'opacity-100',
+        selected && 'text-ink-soft',
+      )}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
+      }}
+      onClick={(e) => {
+        e.stopPropagation()
+        onToggle()
+      }}
+    >
+      {icon}
+    </button>
   )
 }
 
 function Caret({ open, present }: { open: boolean; present: boolean }) {
   if (!present) return null
-  return open ? <ChevronDownIcon width={11} height={11} /> : <ChevronRightIcon width={11} height={11} />
-}
-
-function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="mr-0.5 inline-block rounded-[5px] border border-line bg-paper px-1 font-mono text-[9.5px] leading-[15px] text-ink-soft">
-      {children}
-    </kbd>
-  )
+  return open ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />
 }

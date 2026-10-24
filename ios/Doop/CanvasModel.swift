@@ -24,10 +24,18 @@ final class CanvasModel: ObservableObject {
     @Published var connectionError: String?
     @Published var error: String?
     @Published var deleted = false
-    /// When on, taps inside the selected frame pick elements instead of frames.
-    @Published var inspecting = false
     @Published var selectedElement: SelectedElement?
     @Published var viewportCommand = 0
+    @Published private var undoStack: [UndoEntry] = []
+    @Published private var pendingEdits = 0
+    @Published private var undoing = false
+    private var moveOrigins: [String: DesignFrame] = [:]
+    private struct UndoEntry {
+        enum Kind { case update, create, delete }
+        var kind: Kind
+        var frameID: String
+        var body: [String: Any]
+    }
     private var connection: Task<Void, Never>?
     private var connectionID: UUID?
     private var socket: URLSessionWebSocketTask?
@@ -37,6 +45,8 @@ final class CanvasModel: ObservableObject {
 
     init(id: String, client: DoopClient) { self.id = id; self.client = client }
     var selected: DesignFrame? { canvas?.frames.first { $0.id == selectedID } }
+    var canEdit: Bool { connected && pendingEdits == 0 && !undoing }
+    var canUndo: Bool { canEdit && !undoStack.isEmpty }
 
     func start() {
         guard connection == nil else { return }
@@ -160,6 +170,7 @@ final class CanvasModel: ObservableObject {
                 if let height = event.height { canvas?.frames[index].height = height }
             }
         case "canvas:renamed": if let name = event.name { canvas?.name = name }
+        case "canvas:pages": if let pages = event.pages { canvas?.pages = pages }
         case "canvas:deleted":
             deleted = true; stop()
             Task { await AgentLiveActivities.shared.endCanvas(id: id, client: client) }
@@ -179,6 +190,9 @@ final class CanvasModel: ObservableObject {
     }
 
     func addFrame() async {
+        guard canEdit else { return }
+        pendingEdits += 1
+        defer { pendingEdits -= 1 }
         do {
             let right = canvas?.frames.map { $0.x + $0.width }.max() ?? -80
             let data = try await client.data("/api/canvases/\(id)/frames", method: "POST", body: [
@@ -187,20 +201,29 @@ final class CanvasModel: ObservableObject {
             ])
             let frame = try JSONDecoder().decode(DesignFrame.self, from: data)
             if canvas != nil { upsert(frame, into: &canvas!.frames) }
+            record(UndoEntry(kind: .create, frameID: frame.id, body: [:]))
             select(frame.id)
             viewportCommand += 1
         } catch { self.error = error.localizedDescription }
     }
 
     func patchFrame(_ frameID: String, patch: [String: Any]) async throws {
+        guard canEdit else { throw CanvasEditError.busy }
+        let before = canvas?.frames.first { $0.id == frameID }
+        pendingEdits += 1
+        defer { pendingEdits -= 1 }
         let data = try await client.data("/api/frames/\(frameID)", method: "PATCH", body: patch)
         let frame = try JSONDecoder().decode(DesignFrame.self, from: data)
         if canvas != nil { upsert(frame, into: &canvas!.frames) }
+        if let before { recordUpdate(before: before, after: frame, keys: Array(patch.keys)) }
     }
 
     func moveFrame(_ frameID: String, x: Double, y: Double) async {
-        guard x.isFinite, y.isFinite, abs(x) < 1_000_000, abs(y) < 1_000_000,
-              canvas?.frames.contains(where: { $0.id == frameID }) == true else { return }
+        guard connected, !undoing, x.isFinite, y.isFinite, abs(x) < 1_000_000, abs(y) < 1_000_000,
+              let before = canvas?.frames.first(where: { $0.id == frameID }) else { return }
+        if moveOrigins[frameID] == nil { moveOrigins[frameID] = before }
+        pendingEdits += 1
+        defer { pendingEdits -= 1 }
         let token = pendingMoves.begin(frameID: frameID, x: x, y: y)
         // Keep the dropped preview in place while the save is in flight, even
         // when cursor/presence events cause the canvas layers to sync.
@@ -212,10 +235,14 @@ final class CanvasModel: ObservableObject {
             let data = try await client.data("/api/frames/\(frameID)", method: "PATCH", body: ["x": x, "y": y])
             let frame = try JSONDecoder().decode(DesignFrame.self, from: data)
             guard pendingMoves.finish(frameID: frameID, token: token) else { return }
+            if let origin = moveOrigins.removeValue(forKey: frameID) {
+                recordUpdate(before: origin, after: frame, keys: ["x", "y"])
+            }
             // A deletion received during the save must not resurrect the frame.
             if canvas?.frames.contains(where: { $0.id == frameID }) == true { upsert(frame, into: &canvas!.frames) }
         } catch {
             guard pendingMoves.finish(frameID: frameID, token: token) else { return }
+            moveOrigins.removeValue(forKey: frameID)
             self.error = error.localizedDescription
             canvas = try? await client.get("/api/canvases/\(id)")
         }
@@ -250,16 +277,116 @@ final class CanvasModel: ObservableObject {
     func comment(_ text: String, frameID: String) async throws {
         pruneSelection()
         let element = selectedElement?.frameID == frameID ? selectedElement : nil
-        _ = try await client.data("/api/frames/\(frameID)/comments", method: "POST", body: [
+        let data = try await client.data("/api/frames/\(frameID)/comments", method: "POST", body: [
             "text": text, "selector": element?.selector ?? "body", "snippet": element?.text ?? "",
         ])
+        // A successful post is visible immediately, including when the socket
+        // is reconnecting. Its later broadcast replaces this same ID.
+        let comment = try JSONDecoder().decode(CanvasComment.self, from: data)
+        upsert(comment, into: &comments)
     }
 
     func deleteFrame(_ frameID: String) async throws {
+        guard canEdit else { throw CanvasEditError.busy }
+        let before = canvas?.frames.first { $0.id == frameID }
+        pendingEdits += 1
+        defer { pendingEdits -= 1 }
         _ = try await client.data("/api/frames/\(frameID)", method: "DELETE")
+        if let before { record(UndoEntry(kind: .delete, frameID: frameID, body: frameBody(before))) }
         canvas?.frames.removeAll { $0.id == frameID }
         select(nil)
     }
+
+    /// Undo only this client's saved frame changes, through the same API used
+    /// by editing so collaborators receive the inverse live as well.
+    func undo() async {
+        guard canUndo else { return }
+        undoing = true
+        defer { undoing = false }
+        while let entry = undoStack.last {
+            do {
+                switch entry.kind {
+                case .update:
+                    let data = try await client.data("/api/frames/\(entry.frameID)", method: "PATCH", body: entry.body)
+                    let frame = try JSONDecoder().decode(DesignFrame.self, from: data)
+                    if canvas != nil { upsert(frame, into: &canvas!.frames) }
+                    select(frame.id)
+                case .create:
+                    _ = try await client.data("/api/frames/\(entry.frameID)", method: "DELETE")
+                    canvas?.frames.removeAll { $0.id == entry.frameID }
+                    if selectedID == entry.frameID { select(nil) }
+                case .delete:
+                    let frame = try await restoreFrame(entry.body)
+                    if canvas != nil { upsert(frame, into: &canvas!.frames) }
+                    // Recreating a deleted frame gives it a new server ID. Older
+                    // edits and its original creation must follow the restored copy.
+                    for index in undoStack.indices where undoStack[index].frameID == entry.frameID {
+                        undoStack[index].frameID = frame.id
+                    }
+                    select(frame.id)
+                    viewportCommand += 1
+                }
+                undoStack.removeLast()
+                return
+            } catch let error as APIError where error.status == 404 && entry.kind != .delete {
+                // A collaborator deleted this frame. Discard its obsolete edits
+                // and continue to the next undoable change in this same tap.
+                undoStack.removeAll { $0.frameID == entry.frameID && $0.kind != .delete }
+                canvas?.frames.removeAll { $0.id == entry.frameID }
+                if selectedID == entry.frameID { select(nil) }
+            } catch {
+                // Temporary failures (including failed restores) remain retryable.
+                self.error = error.localizedDescription
+                return
+            }
+        }
+    }
+
+    private func restoreFrame(_ savedBody: [String: Any]) async throws -> DesignFrame {
+        var body = savedBody
+        if let pages = canvas?.pages, !pages.contains(where: { $0.id == body["pageId"] as? String }) {
+            body["pageId"] = pages.first?.id
+        }
+        let path = "/api/canvases/\(id)/frames"
+        let data: Data
+        do {
+            data = try await client.data(path, method: "POST", body: body)
+        } catch let error as APIError where error.status == 400 && error.message == "page not found" && body["pageId"] != nil {
+            // Page events can lag behind this request. The rejected POST created
+            // nothing; omitting pageId lets the server choose its current first page.
+            body.removeValue(forKey: "pageId")
+            data = try await client.data(path, method: "POST", body: body)
+        }
+        return try JSONDecoder().decode(DesignFrame.self, from: data)
+    }
+
+    private func frameBody(_ frame: DesignFrame) -> [String: Any] {
+        var body: [String: Any] = ["name": frame.name, "html": frame.html, "x": frame.x, "y": frame.y,
+                                   "width": frame.width, "height": frame.height]
+        if let pageID = frame.pageId { body["pageId"] = pageID }
+        if let hidden = frame.hidden { body["hidden"] = hidden }
+        if let locked = frame.locked { body["locked"] = locked }
+        return body
+    }
+
+    private func recordUpdate(before: DesignFrame, after: DesignFrame, keys: [String]) {
+        let old = frameBody(before), new = frameBody(after)
+        var inverse: [String: Any] = [:]
+        for key in keys {
+            if let value = old[key] as? NSObject, !value.isEqual(new[key]) { inverse[key] = value }
+        }
+        if !inverse.isEmpty { record(UndoEntry(kind: .update, frameID: after.id, body: inverse)) }
+    }
+
+    private func record(_ entry: UndoEntry) {
+        undoStack.append(entry)
+        if undoStack.count > 100 { undoStack.removeFirst() }
+    }
+}
+
+private enum CanvasEditError: LocalizedError {
+    case busy
+    var errorDescription: String? { "Connect to the canvas and wait for the current edit to finish, then try again." }
 }
 
 /// The selection a prompt is scoped to, as the prompt bar's chip shows it.

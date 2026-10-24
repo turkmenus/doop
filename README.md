@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/banner.png" alt="doop — the open-source alternative to Paper.design: humans and AI agents designing together, live" width="100%">
+  <img src=".github/assets/banner.png" alt="Doop, the open-source alternative to Paper.design: a live canvas where Claude Code streams a pricing section while ChatGPT and Claude Code cursors move across the frames" width="100%">
 </p>
 
 <p align="center">
@@ -17,8 +17,13 @@ in the browser; AI agents edit through the built-in **MCP server**, streaming th
 live. Everyone sees everything as it happens: cursors, presence, frame edits, agent status, and an
 activity feed.
 
+Think of it as Claude Design for whichever agent you already use: **Claude Code, Codex, ChatGPT,
+Cursor, OpenCode** or any other MCP client designs on the same canvas, and the built-in Doop Agent
+runs on **GPT, Claude, Gemini, DeepSeek, Kimi or Qwen** models
+([every agent and model](#works-with-any-agent)).
+
 <p align="center">
-  <img src=".github/assets/canvas.png" alt="A doop canvas: three frames of a ceramics brand — landing hero, mobile product page and brand tokens" width="100%">
+  <img src=".github/assets/canvas.png" alt="A Doop canvas with three frames for a travel app (landing hero, mobile itinerary and a booking card) and two collaborators' live cursors" width="100%">
 </p>
 
 - **Design with agents, not prompts-and-refresh** — connect Claude Code (or any MCP client) once,
@@ -40,6 +45,30 @@ activity feed.
   agents inherit exactly their human's access.
 - **Self-host in one command** — `docker compose up`, or `bun run dev` with zero configuration
   (embedded Postgres, no external services required).
+
+## Works with any agent
+
+Doop isn't tied to one model vendor. Every agent below designs through the same MCP server, works
+as the person who connected it, and shows up live on the canvas with its own cursor, status and
+tasks. **Connect AI** in the top bar walks you through each one.
+
+<p align="center">
+  <img src=".github/assets/connect-ai.png" alt="The Connect AI dialog: choose Claude Code, Claude, ChatGPT, Codex, Cursor or any other MCP client" width="100%">
+</p>
+
+| Agent                                        | How it connects                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------- |
+| Claude Code                                  | `claude mcp add`, OAuth in the browser ([setup](#hook-up-claude-code))          |
+| Claude (web and desktop)                     | **Add to Claude** in Connect AI ([setup](#connect-claude))                      |
+| Codex (CLI and desktop)                      | `codex mcp add`, OAuth in the browser ([setup](#connect-an-ai-agent))           |
+| ChatGPT                                      | A custom MCP server in ChatGPT, guided by **Connect AI → ChatGPT**              |
+| Cursor                                       | **Add to Cursor** in Connect AI                                                 |
+| OpenCode, VS Code Copilot, OpenClaw and more | Any MCP client, over OAuth or with an agent key ([setup](#connect-an-ai-agent)) |
+| Headless agents (n8n, Mastra, CI)            | An agent key as a bearer header ([setup](#headless-agents-agent-keys))          |
+
+No agent of your own? The built-in [Doop Agent](#the-doop-agent) runs on the model account you
+connect: a ChatGPT subscription, or an OpenAI, Claude, Gemini or OpenRouter key. OpenRouter brings
+DeepSeek, Kimi, Qwen, GLM and MiniMax ([details](#past-the-free-tasks-connect-your-own-chatgpt)).
 
 ## Quickstart
 
@@ -72,6 +101,13 @@ everything). Set `DATABASE_URL` to use a real Postgres — same code path as PGl
 
 Prefer not to run anything? **[doop.design](https://doop.design)** is the hosted version.
 
+Once you sign in, Home is where you start: describe what you want and Doop makes a canvas with
+drafts queued for the Doop Agent, or pick up one of your canvases, workspaces and connected agents.
+
+<p align="center">
+  <img src=".github/assets/home.png" alt="Doop's home: the agent prompt with suggestion chips over a gradient wave, the canvas grid, and a rail with workspaces and connected agents" width="100%">
+</p>
+
 ## Canvas chat, imports and exports
 
 The canvas Chat tab keeps a shared conversation alongside the design. Mention an agent role to
@@ -81,11 +117,29 @@ The import source picker offers **Website**, **Live app** (the sync snippet), an
 Right-click a frame and choose **Export…** to download PNG or JPG. A progress toast tracks the
 render; the desktop app opens its native save panel.
 
-## Linear
+## Integrations
 
-Connect Linear from **Integrations** to read issues through MCP or install Doop as a delegated
-agent. Delegated tickets create a canvas and a design card, then report the result back to Linear.
-See [Linear setup](docs/linear.md) for OAuth and webhook configuration.
+**Integrations** in the rail is where an account connects the outside tools Doop works with:
+
+| Integration | What it does                                                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Linear      | Read issues through MCP, or delegate an issue to Doop: it designs a canvas and reports the result back to Linear ([setup](docs/linear.md)) |
+| Slack       | Mention `@Doop` with a brief; it designs a canvas and posts the result in the thread ([setup](docs/slack.md))                              |
+| Meta Ads    | Pull ad creatives onto a canvas on a schedule with an automation (`/automations`)                                                          |
+| Figma       | Import frames as editable HTML and export frames back to Figma. Doop Cloud only                                                            |
+| Canva       | Import Canva designs as editable frames and send frames back with live text. Doop Cloud only                                               |
+
+<p align="center">
+  <img src=".github/assets/integrations.png" alt="The Integrations page with cards for Figma, Canva, Linear, Slack and Meta Ads" width="100%">
+</p>
+
+To reference a specific element in feedback, select it and choose **Copy link**
+in its floating toolbar, or right-click its Layers row and choose **Copy link to
+element**. Opening the link selects the element and opens its properties on the
+correct page. The URL includes the canvas ID, frame ID and URL-encoded CSS
+`selector`, so an AI agent can locate it in the frame HTML. Canvas access rules
+still apply. Selectors that use element IDs survive layout changes; selectors
+based on sibling positions can change when the HTML is restructured.
 
 ## iPhone and iPad app
 
@@ -93,6 +147,20 @@ The SwiftUI iOS app lives in [`ios/`](ios/README.md). Open `ios/Doop.xcodeproj`
 in Xcode to run it against Doop Cloud or your own HTTPS server. It uses SwiftUI for the app interface and a native canvas that
 renders frames with the Blitz HTML/CSS engine (Rust, no WebKit), over the same REST API and WebSocket rooms. The app is in development;
 see the iOS README for validation status and remaining release requirements.
+
+## Connect Claude
+
+Choose **Connect AI → Claude → Add to Claude**. On hosted Doop, this opens Claude's
+connector form with Doop's name and server URL filled in. Confirm it, sign in to
+Doop, then start a new Claude chat and paste the canvas prompt from the dialog.
+No file download, terminal or API key needed.
+
+The updated Doop desktop app also offers **Add to Claude** for local and self-hosted
+servers: it opens Claude Desktop's extension installer directly, with your server
+URL filled in. Confirm the installation in Claude and approve the Doop sign-in.
+The online connector needs a publicly reachable HTTPS server; localhost connections
+use the desktop app. Manual extension installation remains available as a fallback.
+Build and installation details: [`claude-extension/`](claude-extension/README.md).
 
 ## Hook up Claude Code
 
@@ -439,10 +507,32 @@ Claude Code:
 claude mcp add --transport http doop http://localhost:4300/mcp
 ```
 
+Codex:
+
+```bash
+codex mcp add doop --url http://localhost:4300/mcp
+```
+
 Generic MCP config:
 
 ```json
 { "mcpServers": { "doop": { "type": "http", "url": "http://localhost:4300/mcp" } } }
+```
+
+OpenCode takes Doop as a remote MCP server in `opencode.json`. An
+[agent key](#headless-agents-agent-keys) in the header skips the browser sign-in:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "doop": {
+      "type": "remote",
+      "url": "http://localhost:4300/mcp",
+      "headers": { "Authorization": "Bearer dpk_…" }
+    }
+  }
+}
 ```
 
 ### Headless agents (agent keys)

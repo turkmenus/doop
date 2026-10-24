@@ -164,8 +164,35 @@ export const frames = pgTable(
     updatedBy: text('updated_by').notNull(),
     /** product-made onboarding/example content; null = a real user frame */
     demo: boolean('demo'),
+    /** hidden from the stage via the Layers panel; null = shown */
+    hidden: boolean('hidden'),
+    /** Figma-style lock; null = unlocked */
+    locked: boolean('locked'),
   },
   (t) => [index('frames_canvas_idx').on(t.canvasId)],
+)
+
+/** Frame design history: the HTML (and size) a frame had before a burst of
+ *  edits replaced it, so an agent's one-shot redesign or stream is never the
+ *  only copy left. Append-only, pruned to the newest MAX_FRAME_VERSIONS per
+ *  frame; `saved_by`/`saved_at` name who authored that state and when. Cold
+ *  path: written on each burst boundary, read only by the history UI. */
+export const frameVersions = pgTable(
+  'frame_versions',
+  {
+    id: text('id').primaryKey(),
+    frameId: text('frame_id').notNull(),
+    canvasId: text('canvas_id').notNull(),
+    html: text('html').notNull(),
+    width: doublePrecision('width').notNull(),
+    height: doublePrecision('height').notNull(),
+    savedAt: bigint('saved_at', { mode: 'number' }).notNull(),
+    savedBy: text('saved_by').notNull(),
+    /** 'user' | 'agent'; null when the author's kind was not known (a state
+     *  authored before the server last booted) */
+    savedByKind: text('saved_by_kind'),
+  },
+  (t) => [index('frame_versions_frame_idx').on(t.frameId), index('frame_versions_canvas_idx').on(t.canvasId)],
 )
 
 /** Design-sync keys: the write-only capability behind the /ingest endpoint.
@@ -335,9 +362,14 @@ export const comments = pgTable(
   {
     id: text('id').primaryKey(),
     canvasId: text('canvas_id').notNull(),
-    frameId: text('frame_id').notNull(),
+    /* element comment: the frame + selector + snippet; canvas comment: no
+       frame, a page and a world point instead (selector/snippet empty) */
+    frameId: text('frame_id'),
     selector: text('selector').notNull(),
     snippet: text('snippet').notNull(),
+    pageId: text('page_id'),
+    x: doublePrecision('x'),
+    y: doublePrecision('y'),
     fromName: text('from_name').notNull(),
     fromUserId: text('from_user_id'),
     text: text('text').notNull(),
@@ -353,27 +385,6 @@ export const comments = pgTable(
     parentId: text('parent_id'),
   },
   (t) => [index('comments_canvas_idx').on(t.canvasId)],
-)
-
-/** The canvas chat. Rows are immutable: a message that queued a card points
- *  at it through task_id, an agent's answer points back through reply_to_id. */
-export const chatMessages = pgTable(
-  'chat_messages',
-  {
-    id: text('id').primaryKey(),
-    canvasId: text('canvas_id').notNull(),
-    fromName: text('from_name').notNull(),
-    fromKind: text('from_kind').notNull(),
-    fromUserId: text('from_user_id'),
-    color: text('color').notNull(),
-    text: text('text').notNull(),
-    at: bigint('at', { mode: 'number' }).notNull(),
-    /** comma-joined agent-role ids the text @mentions, in order */
-    mentions: text('mentions'),
-    taskId: text('task_id'),
-    replyToId: text('reply_to_id'),
-  },
-  (t) => [index('chat_messages_canvas_idx').on(t.canvasId)],
 )
 
 /** Uploaded image assets: metadata only — bytes live in object storage (or

@@ -20,8 +20,10 @@ HTML/CSS engine (Stylo + Taffy + Parley), compiled into the app as a static libr
   error instead of retrying forever. Backgrounding cancels the current connection,
   and callbacks from that connection cannot change a later foreground session.
 - **Native canvas** (`Doop/Blitz/BlitzCanvasView.swift`): a UIKit view with one
-  Core Animation layer per frame. Pan, pinch zoom, tap to select, double tap to zoom
-  to a frame, drag a frame by its title. Dragged frames snap to other frames' edges
+  Core Animation layer per frame. Pan, pinch zoom, tap to select and dismiss the
+  keyboard, double tap a frame or its title to fit it, then toggle between a closer
+  view at the tapped point and fitting the frame. Double tap empty canvas to fit
+  the board; drag a frame by its title. Dragged frames snap to other frames' edges
   and centers within eight screen points, with alignment guides matching the web.
   Labels, selection outlines and collaborator
   cursors are native layers, so a board with many frames costs one small bitmap per
@@ -63,8 +65,8 @@ HTML/CSS engine (Stylo + Taffy + Parley), compiled into the app as a static libr
   zoom. Playback pauses during gestures and for frames narrower than 100 pt, at
   most two frames play at once, and when an animation ends the tile is repainted
   at the density the camera wants. Base bitmaps keep the last animation pose.
-- **Element inspection**: with Inspect on, tapping inside the selected frame hit
-  tests the Blitz DOM. The chip shows `tag#id.class` and the element's text, the
+- **Element inspection**: tapping inside any frame selects it and hit tests the
+  Blitz DOM automatically, without a separate mode. The chip shows `tag#id.class` and the element's text, the
   outline shows its box, and Comment posts an element-anchored comment with the
   same `tag:nth-of-type(n)` selector path the web editor and agents use.
 - **Scoped prompts**: as on the web, the selection is the prompt bar's scope. A
@@ -235,7 +237,7 @@ exists only on the local dev database.
 - Frames that depend on scripts render as static HTML. A per-frame WebKit fallback
   for those is the next tier, not built yet.
 - Advanced web workflows such as design memory, GitHub imports, workspace billing,
-  undo/redo and the full element inspector are not yet native features.
+  redo and the full element inspector are not yet native features.
 - Live model-generated tasks require a configured server provider or connected model
   account.
 - App Store/TestFlight release needs signing, device QA, privacy metadata and an archive.
@@ -266,12 +268,34 @@ Still manual: the App Store Connect record, screenshots, the review demo account
 on the public server, and a run on physical iPhone and iPad hardware before the
 first TestFlight build goes out.
 
+## Brand typography
+
+The wordmark matches `src/components/ui/wordmark.tsx`: “Doop” in Inter ExtraBold
+with -0.01em tracking. Sign-in headlines use Inter Medium; the home greeting
+uses Hanken Grotesk Light, matching the web's `HomeHero`. Custom text scales
+with Dynamic Type. The original variable fonts and SIL Open Font Licenses are
+bundled under `Doop/Fonts`, registered through `Doop/Info.plist`, and work offline.
+Sources: [Inter](https://github.com/google/fonts/tree/main/ofl/inter) and
+[Hanken Grotesk](https://github.com/google/fonts/tree/main/ofl/hankengrotesk).
+
 ## Floating controls and Live Activities
 
 The library and canvas use floating capsule controls with native Liquid Glass on
 iOS 26+, material on older systems, and an opaque accessible fallback when Reduce
 Transparency is enabled. The canvas renders underneath the controls; Fit reserves
-space for the dock.
+space for the top-right vertical tool rail and bottom prompt. Undo at the top of
+that rail reverses this session's saved frame additions, property/HTML edits,
+moves and deletions through the normal API. Failed edits do not enter history,
+and a failed undo remains available to retry. Inspection is always active.
+Canvas layers are clipped at the native view boundary, below the header, even
+while panning or zooming. The renderer extends through the bottom safe area;
+the prompt and tools remain inside it, avoiding a black strip at the home indicator.
+Icons use the system foreground color and compact
+44-point targets; glass uses the native regular material without a black tint.
+
+Comments accept both element and canvas anchors in snapshots and live events.
+Successful posts also update locally from the response, deduplicating the socket
+echo, so reconnecting does not hide a comment that has already been saved.
 
 On iOS 16.2+, opening a canvas with active or queued agents starts a Lock Screen
 Live Activity and Dynamic Island status where available. It shows the canvas,

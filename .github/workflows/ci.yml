@@ -54,7 +54,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun run build
+      # The Docker build stage uses Bun even for commands named `node`.
+      - run: bun run --bun build
 
   # The suite boots a real server per integration file, which is CPU-bound on
   # the 2-vCPU runner; sharding across runners is what brings the step down.
