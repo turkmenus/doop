@@ -185,6 +185,12 @@ export async function runOllamaTurn(config: OllamaConfig, req: AgentTurnRequest)
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
+    if (config.vision && /does not support image/i.test(text)) {
+      console.warn(
+        `[ollama] model "${config.model}" does not support image input, automatically retrying turn with vision=false`,
+      )
+      return runOllamaTurn({ ...config, vision: false }, req)
+    }
     if (res.status === 401 || res.status === 403) {
       throw new ModelAuthError(`Ollama / OpenAI provider authentication failed (${res.status}): ${text}`)
     }

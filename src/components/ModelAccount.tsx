@@ -112,6 +112,7 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState('')
   const [ollamaModel, setOllamaModel] = useState('')
   const [ollamaApiKey, setOllamaApiKey] = useState('')
+  const [ollamaVision, setOllamaVision] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [switchFailed, setSwitchFailed] = useState(false)
@@ -127,6 +128,7 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
       setOllamaBaseUrl('')
       setOllamaModel('')
       setOllamaApiKey('')
+      setOllamaVision(false)
       setShowKey(false)
       setError('')
       setSwitchFailed(false)
@@ -290,6 +292,7 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
         baseUrl: ollamaBaseUrl.trim(),
         model: ollamaModel.trim() || undefined,
         apiKey: ollamaApiKey.trim() || undefined,
+        vision: ollamaVision,
       })
       if (account?.kind !== 'ollama') await selectServer()
       settle(next)
@@ -730,6 +733,10 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
                 <dd className="min-w-0">
                   <code className={planAsCode}>{account.model || 'hermes3'}</code>
                 </dd>
+                <dt>Vision</dt>
+                <dd className="min-w-0">
+                  <code className={planAsCode}>{account.vision ? 'Enabled' : 'Disabled (Text/Code only)'}</code>
+                </dd>
               </dl>
               <div className={actionsRow}>
                 <div className="flex flex-wrap gap-2 max-md:[&>button]:flex-1">
@@ -739,6 +746,7 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
                       setOllamaBaseUrl(account.accountId || account.email || '')
                       setOllamaModel(account.model || 'hermes3')
                       setOllamaApiKey('')
+                      setOllamaVision(account.vision ?? false)
                       setShowKey('ollama')
                     }}
                   >
@@ -806,6 +814,18 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
                     <p className="mt-1 text-[12px] text-ink-faint">Leave blank if no authentication required</p>
                   </div>
                 </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    id="ollama-vision"
+                    type="checkbox"
+                    className="size-4 cursor-pointer rounded border-line accent-brand"
+                    checked={ollamaVision}
+                    onChange={(e) => setOllamaVision(e.target.checked)}
+                  />
+                  <label htmlFor="ollama-vision" className="cursor-pointer select-none text-[12.5px] text-ink">
+                    Model supports vision / multimodal image input (e.g. Qwen2.5-VL, LLaVA, Pixtral)
+                  </label>
+                </div>
               </div>
               <div className={maActions}>
                 <Button
@@ -835,6 +855,7 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
                   setOllamaBaseUrl(account.accountId || '')
                   setOllamaModel(account.model || 'hermes3')
                   setOllamaApiKey('')
+                  setOllamaVision(account.vision ?? false)
                   setShowKey('ollama')
                 }}
                 disabled={busy}

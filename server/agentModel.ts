@@ -167,7 +167,7 @@ function ollamaTier(): AgentModel | null {
   const baseUrl = env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
   const model = env.OLLAMA_MODEL || env.DOOP_AGENT_MODEL || 'hermes3'
   const apiKey = env.OLLAMA_API_KEY || env.OPENAI_API_KEY
-  const vision = Boolean(apiKey) || isVisionModel(model)
+  const vision = isVisionModel(model)
   const config = { baseUrl, model, apiKey, vision }
   return {
     provider: 'ollama',

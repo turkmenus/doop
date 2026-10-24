@@ -877,8 +877,9 @@ app.post('/api/model-account/ollama', async (req, res) => {
     const baseUrl = String(req.body?.baseUrl ?? '')
     const model = req.body?.model ? String(req.body.model) : undefined
     const apiKey = req.body?.apiKey ? String(req.body.apiKey) : undefined
+    const vision = req.body?.vision !== undefined ? Boolean(req.body.vision) : undefined
     const previous = await modelAccounts.getAccount(req.user!.id)
-    const status = await modelAccounts.connectOllama(req.user!.id, { baseUrl, model, apiKey })
+    const status = await modelAccounts.connectOllama(req.user!.id, { baseUrl, model, apiKey, vision })
     if (previous?.kind !== 'ollama') {
       const preference = await getLocalAgentPreference(req.user!.id)
       await saveLocalAgentPreference(req.user!.id, { ...preference, enabled: false })

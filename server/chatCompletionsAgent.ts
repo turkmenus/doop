@@ -223,11 +223,15 @@ function fromCompletion(body: CompletionBody, label: string): TurnResult {
     }
     const rawCall = call as {
       id?: string
-      function?: { name?: string; arguments?: string }
+      function?: { name?: string; arguments?: string; thought_signature?: string; thoughtSignature?: string }
       thought_signature?: string
       thoughtSignature?: string
     }
-    const signature = rawCall.thought_signature ?? rawCall.thoughtSignature
+    const signature =
+      rawCall.thought_signature ??
+      rawCall.thoughtSignature ??
+      rawCall.function?.thought_signature ??
+      rawCall.function?.thoughtSignature
     content.push({
       type: 'tool_use',
       id: call.id || `call_${randomUUID()}`,

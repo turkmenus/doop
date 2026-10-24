@@ -83,6 +83,7 @@ export interface AccountStatus {
   plan?: string
   /** the model tier in effect, resolved (never null in a status) */
   model?: string
+  vision?: boolean
   connectedAt?: number
 }
 
@@ -132,6 +133,7 @@ export async function getStatus(userId: string): Promise<AccountStatus> {
     ...(account.plan ? { plan: account.plan } : {}),
     /* resolved, so the UI shows what will actually run rather than "default" */
     model: accountModelFor(account),
+    vision: accountVisionFor(account),
     connectedAt: account.connectedAt,
   }
 }
@@ -177,11 +179,13 @@ export function isVisionModel(model: string): boolean {
  *  OpenRouter, whose roster mixes text-only models — there the conservative
  *  answer is a degraded run rather than a 400 on the first screenshot. */
 export function accountVisionFor(
-  account: Pick<ModelAccount, 'kind' | 'model'> & Partial<Pick<ModelAccount, 'apiKey'>>,
+  account: Pick<ModelAccount, 'kind' | 'model'> & Partial<Pick<ModelAccount, 'apiKey' | 'plan'>>,
 ): boolean {
   const model = accountModelFor(account)
   if (account.kind === 'ollama') {
-    return Boolean(account.apiKey) || isVisionModel(model)
+    if (account.plan === 'vision') return true
+    if (account.plan === 'no-vision') return false
+    return isVisionModel(model)
   }
   const menu =
     account.kind === 'openrouter-key' ? OPENROUTER_MODELS : account.kind === 'gemini-key' ? GEMINI_MODELS : null
@@ -774,7 +778,7 @@ export function connectGeminiKey(userId: string, apiKey: string): Promise<Accoun
 
 export async function connectOllama(
   userId: string,
-  opts: { baseUrl: string; model?: string; apiKey?: string },
+  opts: { baseUrl: string; model?: string; apiKey?: string; vision?: boolean },
 ): Promise<AccountStatus> {
   const baseUrl = opts.baseUrl.trim().replace(/\/+$/, '')
   if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
@@ -782,6 +786,7 @@ export async function connectOllama(
   }
   const model = opts.model?.trim() || 'hermes3'
   const apiKey = opts.apiKey?.trim() || undefined
+  const plan = opts.vision === true ? 'vision' : opts.vision === false ? 'no-vision' : undefined
   await save({
     userId,
     kind: 'ollama',
@@ -789,6 +794,7 @@ export async function connectOllama(
     email: baseUrl,
     apiKey,
     model,
+    plan,
   })
   return getStatus(userId)
 }

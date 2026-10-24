@@ -359,4 +359,87 @@ describe('Ollama / OpenAI-Compatible Agent Provider', () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  it('automatically falls back to vision:false when provider returns 400 does not support image', async () => {
+    let callCount = 0
+    let lastBody: CapturedPayload | null = null
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      callCount++
+      lastBody = JSON.parse(init?.body as string)
+      if (callCount === 1) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: 'this model does not support image input',
+              type: 'invalid_request_error',
+            },
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: { role: 'assistant', content: 'Fallback worked.' },
+              finish_reason: 'stop',
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as typeof globalThis.fetch
+
+    try {
+      const turnReq: AgentTurnRequest = {
+        system: [{ text: 'System prompt' }],
+        tools: [],
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call_shot',
+                name: 'screenshot_frame',
+                input: { frame_id: 'f1' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_shot',
+                content: [
+                  { type: 'text', text: 'Screenshot of Card' },
+                  {
+                    type: 'image',
+                    source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUg==' },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        maxTokens: 1024,
+      }
+
+      const res = await runOllamaTurn(
+        { baseUrl: 'https://beam.example.com/v1', model: 'beam:cloud', vision: true },
+        turnReq,
+      )
+
+      expect(callCount).toBe(2)
+      expect(res.content[0]).toEqual({ type: 'text', text: 'Fallback worked.' })
+      expect(lastBody).not.toBeNull()
+      const toolMsg = lastBody!.messages.find((m: { role: string }) => m.role === 'tool')
+      expect(toolMsg?.content).toContain('[image omitted — the selected model cannot view images]')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })

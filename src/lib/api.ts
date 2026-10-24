@@ -167,6 +167,7 @@ export interface ModelAccountStatus {
   plan?: string
   /** the model tier this account runs on right now */
   model?: string
+  vision?: boolean
   connectedAt?: number
   /** false when the server has switched the ChatGPT flow off */
   chatgptEnabled?: boolean
@@ -465,7 +466,7 @@ export const api = {
     req<ModelAccountStatus>('/api/model-account/openrouter-key', { method: 'POST', body: JSON.stringify({ apiKey }) }),
   connectGeminiKey: (apiKey: string) =>
     req<ModelAccountStatus>('/api/model-account/gemini-key', { method: 'POST', body: JSON.stringify({ apiKey }) }),
-  connectOllama: (opts: { baseUrl: string; model?: string; apiKey?: string }) =>
+  connectOllama: (opts: { baseUrl: string; model?: string; apiKey?: string; vision?: boolean }) =>
     req<ModelAccountStatus>('/api/model-account/ollama', { method: 'POST', body: JSON.stringify(opts) }),
   disconnectModelAccount: () => req<ModelAccountStatus>('/api/model-account', { method: 'DELETE' }),
   setAgentModel: (model: string) =>
