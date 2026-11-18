@@ -72,7 +72,8 @@ export async function describerFor(
         : { model: null, status: { label: null, reason: 'no-model' } }
     }
     const provider = selected.describeProvider
-    const model = provider === 'anthropic' || provider === 'azure' ? serverDescriber(provider) : null
+    const model =
+      provider === 'anthropic' || provider === 'azure' || provider === 'ollama' ? serverDescriber(provider) : null
     return model
       ? { model, payerId: null, status: { label: model.label } }
       : { model: null, status: { label: null, reason: 'no-model' } }

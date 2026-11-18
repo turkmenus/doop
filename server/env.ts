@@ -153,7 +153,10 @@ const schema = {
   WEBHOOK_ALLOW_PRIVATE_URLS: bool({ default: false }),
 
   /* ------------------------------------------------ resident agents */
-  DOOP_AGENT_PROVIDER: str({ choices: ['anthropic', 'azure'], default: 'anthropic' }),
+  DOOP_AGENT_PROVIDER: str({ choices: ['anthropic', 'azure', 'ollama'], default: 'anthropic' }),
+  OLLAMA_BASE_URL: str({ default: undefined }),
+  OLLAMA_MODEL: str({ default: undefined }),
+  OLLAMA_API_KEY: str({ default: undefined }),
   ANTHROPIC_API_KEY: str({ default: undefined }),
   AZURE_OPENAI_ENDPOINT: str({ default: undefined }),
   AZURE_OPENAI_API_KEY: str({ default: undefined }),

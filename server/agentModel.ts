@@ -33,7 +33,8 @@ import {
  *    the free-task meter stops applying to them;
  *  - the server tier, which pays for the free tasks every account starts
  *    with. DOOP_AGENT_PROVIDER picks what it runs on: 'anthropic' (the
- *    default, on ANTHROPIC_API_KEY) or 'azure' (the AZURE_OPENAI_* vars).
+ *    default, on ANTHROPIC_API_KEY), 'azure' (the AZURE_OPENAI_* vars),
+ *    or 'ollama' (OLLAMA_BASE_URL / OLLAMA_MODEL).
  *
  * A run bills exactly ONE person: the requester behind the work it claims. The
  * queue is worked one requester at a time rather than sweeping several people's
@@ -41,7 +42,7 @@ import {
  * else's request.
  */
 
-export type ServerProvider = 'anthropic' | 'azure'
+export type ServerProvider = 'anthropic' | 'azure' | 'ollama'
 export type Provider = ServerProvider | AccountKind | 'claude-local' | 'gemini-cloud'
 
 export interface AgentTurnRequest {
@@ -181,9 +182,61 @@ function azureTier(): AgentModel | null {
   }
 }
 
+function ollamaChatUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, '')
+  if (trimmed.endsWith('/chat/completions')) return trimmed
+  if (trimmed.endsWith('/v1')) return `${trimmed}/chat/completions`
+  return `${trimmed}/v1/chat/completions`
+}
+
+function isOllamaVisionModel(model: string): boolean {
+  return /vision|vl|llava|minicpm|pixtral|bakllava|gpt-4|claude|gemini|omni|kimi|qwen2\.5-vl|internvl|glm-4v/i.test(
+    model,
+  )
+}
+
+function ollamaTier(): AgentModel | null {
+  const baseUrl = env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
+  const model = env.OLLAMA_MODEL || (!env.DOOP_AGENT_MODEL.startsWith('claude-') ? env.DOOP_AGENT_MODEL : 'hermes3')
+  const apiKey = env.OLLAMA_API_KEY || env.OPENAI_API_KEY
+  const vision = isOllamaVisionModel(model)
+  const config: ChatCompletionsConfig = {
+    url: ollamaChatUrl(baseUrl),
+    headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+    model,
+    label: 'Ollama',
+    vision,
+  }
+  return {
+    provider: 'ollama',
+    label: `Doop (${model})`,
+    vision,
+    async run(req) {
+      try {
+        return await runChatCompletionsTurn(config, {
+          system: joinSystem(req),
+          tools: req.tools,
+          messages: req.messages,
+          maxTokens: req.maxTokens,
+          signal: req.signal,
+        })
+      } catch (err) {
+        if (err instanceof ModelAuthError) {
+          throw new Error(
+            'Ollama / custom endpoint rejected this server’s credentials — check OLLAMA_API_KEY and OLLAMA_BASE_URL',
+            { cause: err },
+          )
+        }
+        throw err
+      }
+    },
+  }
+}
+
 const serverTiers: Record<ServerProvider, () => AgentModel | null> = {
   anthropic: anthropicTier,
   azure: azureTier,
+  ollama: ollamaTier,
 }
 
 /* an unknown DOOP_AGENT_PROVIDER fails at boot (server/env.ts) */
@@ -500,7 +553,10 @@ export function accountDescriber(account: ModelAccount): AgentModel | null {
 }
 
 /** The server tier's describer: Haiku on the Anthropic key, the one
- *  deployment on Azure. Null when the free tier is off. */
+ *  deployment on Azure, or the vision-capable Ollama server model. Null when the free tier is off. */
 export function serverDescriber(provider: ServerProvider = serverProvider()): AgentModel | null {
-  return provider === 'anthropic' ? anthropicTier(DESCRIBER_ANTHROPIC_MODEL) : azureTier()
+  if (provider === 'anthropic') return anthropicTier(DESCRIBER_ANTHROPIC_MODEL)
+  if (provider === 'azure') return azureTier()
+  const tier = ollamaTier()
+  return tier?.vision !== false ? tier : null
 }

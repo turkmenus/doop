@@ -26,6 +26,15 @@ describe('server/env.ts', () => {
     expect(env.PORT).toBe(4500)
   })
 
+  it('accepts ollama as the server agent provider with optional OLLAMA_* vars', () => {
+    stubEnv('DOOP_AGENT_PROVIDER', 'ollama')
+    stubEnv('OLLAMA_BASE_URL', 'http://ollama:11434/v1')
+    stubEnv('OLLAMA_MODEL', 'qwen2.5-coder')
+    expect(env.DOOP_AGENT_PROVIDER).toBe('ollama')
+    expect(env.OLLAMA_BASE_URL).toBe('http://ollama:11434/v1')
+    expect(env.OLLAMA_MODEL).toBe('qwen2.5-coder')
+  })
+
   it('parses numbers, booleans, lists and origins', () => {
     stubEnv('MCP_UPLOADS_PER_MIN', '2')
     stubEnv('WEBHOOK_ALLOW_PRIVATE_URLS', '1')
