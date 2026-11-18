@@ -5,6 +5,9 @@ import { drawingDocument, isCanvasElement, queueDrawingSave, type Point } from '
 import { recordCreate, recordDrawingTransfer, recordUpdates } from './history'
 import { currentPageCanvas } from './pages'
 import { useStore } from './store'
+import { elementPath, uniqueIdsIn } from './layers'
+import { bodyPlacementOrigin } from './frameBridge'
+import { carriedCss, newScope, renameInCss, SCOPE_ATTR, withCarriedCss } from './styleCarry'
 
 export interface DrawingRect extends Point {
   width: number
@@ -24,13 +27,17 @@ export interface DrawingHit {
   selector: string
   rect: DrawingRect
   geometry: DrawingGeometry
+  /** the parent box and siblings, in design px, for snapping */
+  snapRects?: DrawingRect[]
 }
 
 const parse = (html: string) => new DOMParser().parseFromString(html, 'text/html')
 const serialize = (doc: Document) => '<!doctype html>\n' + doc.documentElement.outerHTML
 
-/** Only drawings are eligible for canvas reparenting. Imported content keeps
- *  its existing layout/drag behavior, and locks apply through ancestors. */
+/** Inside a frame only drawings are eligible for canvas reparenting:
+ *  imported content keeps its existing layout/drag behavior. A standalone
+ *  element (no selector) is movable whatever it is — a lifted layer as much
+ *  as a drawn shape. Locks apply through ancestors. */
 export function movableDrawing(frame: Frame, selector?: string): HTMLElement | SVGSVGElement | null {
   if (frame.locked || frame.hidden) return null
   const doc = parse(frame.html)
@@ -40,8 +47,9 @@ export function movableDrawing(frame: Frame, selector?: string): HTMLElement | S
   } catch {
     return null
   }
-  if (!el?.matches('[data-doop-drawing]') || el.closest('[data-doop-locked], [data-doop-hidden]')) return null
-  if (!selector && (!isCanvasElement(frame.html) || doc.body.children.length !== 1)) return null
+  if (!el || el.closest('[data-doop-locked], [data-doop-hidden]')) return null
+  if (selector) return el.matches('[data-doop-drawing]') ? (el as HTMLElement | SVGSVGElement) : null
+  if (!isCanvasElement(frame.html) || doc.body.children.length !== 1) return null
   return el as HTMLElement | SVGSVGElement
 }
 
@@ -61,17 +69,21 @@ export function drawingDropFrame(point: Point, sourceId?: string): Frame | null 
   return hit && !hit.locked ? hit : null
 }
 
+const round = (n: number) => Math.round(n * 100) / 100
+
 export function placeDrawing(
   el: HTMLElement | SVGSVGElement,
   rect: DrawingRect,
   frame?: Frame,
   geometry?: DrawingGeometry,
+  /** where the frame's body places absolute layers from (bodyPlacementOrigin) */
+  origin = { x: 0, y: 0 },
 ) {
   const style = el.style
   for (const [key, value] of Object.entries(geometry?.styles ?? {})) style.setProperty(key, value)
-  style.position = frame ? 'fixed' : 'absolute'
-  style.left = `${(frame ? rect.x - frame.x : 0) - (geometry?.offsetX ?? 0)}px`
-  style.top = `${(frame ? rect.y - frame.y : 0) - (geometry?.offsetY ?? 0)}px`
+  style.position = 'absolute'
+  style.left = `${(frame ? rect.x - frame.x - origin.x : 0) - (geometry?.offsetX ?? 0)}px`
+  style.top = `${(frame ? rect.y - frame.y - origin.y : 0) - (geometry?.offsetY ?? 0)}px`
   const fillsBox =
     !geometry ||
     (geometry.width === rect.width &&
@@ -85,14 +97,37 @@ export function placeDrawing(
 
 /** Save the destination before removing the source. A failed source save
  *  rolls the destination back; an unsuccessful rollback keeps both copies. */
+/** The page a drag shows a drawing on: the drawing alone, with the CSS it
+ *  relies on in its frame (scoped as a move carries it) and the frame's
+ *  stylesheet links, so the copy looks like the original it stands in for. */
+export function drawingPreview(sourceHtml: string, path: string, el: Element): string {
+  const scope = newScope()
+  const css = carriedCss(sourceHtml, path, scope)
+  el.setAttribute(SCOPE_ATTR, scope)
+  const links = [...parse(sourceHtml).querySelectorAll('link[rel~="stylesheet"]')].map((link) => link.outerHTML)
+  return withCarriedCss(
+    `<!doctype html><html><head>${links.join('')}</head><body style="margin:0">${el.outerHTML}</body></html>`,
+    css,
+    scope,
+  )
+}
+
+/** Resolves with the frame the drawing landed in (its source, the frame it
+ *  went into, or the one made for it on the canvas), or undefined when the
+ *  move did not happen. */
 export function moveDrawing(
   pressed: Frame,
   selector: string | undefined,
   rect: DrawingRect,
   targetId?: string,
   hit?: DrawingHit,
-): Promise<void> {
+): Promise<string | undefined> {
+  let landed: string | undefined
   const save = async () => {
+    /* where the destination's body places absolute layers from, asked before
+       anything is read, so no edit lands in between */
+    const asked = targetId && targetId !== pressed.id ? bodyPlacementOrigin(targetId) : undefined
+    const destinationOrigin = asked instanceof Promise ? await asked : asked
     const s = useStore.getState()
     const canvas = s.canvas?.id === pressed.canvasId ? s.canvas : await api.getCanvas(pressed.canvasId)
     const source = canvas.frames.find((f) => f.id === pressed.id)
@@ -152,6 +187,7 @@ export function moveDrawing(
         : rect
       const saved = await conditional(source, api.updateFrame(source.id, position, source.updatedAt))
       updateLocal(saved)
+      landed = saved.id
       if (active()) recordUpdates([{ frameId: source.id, before: source, after: position }])
       select(saved)
       return
@@ -164,24 +200,48 @@ export function moveDrawing(
       : sourceDoc.body.firstElementChild
     if (!original) return
     if (target?.id === source.id) {
-      placeDrawing(original as HTMLElement | SVGSVGElement, rect, source, hit?.geometry)
+      /* a move within its own frame changes where it sits, nothing else */
+      const style = (original as HTMLElement | SVGSVGElement).style
+      /* by the drag's travel from where it showed, so whatever its left and
+         top count from (the body's corner, a margin) stays counted */
+      const shift = (value: string, by: number) => (/^-?[\d.]+px$/.test(value) ? round(parseFloat(value) + by) : null)
+      const left = hit && shift(style.left, rect.x - source.x - hit.rect.x)
+      const top = hit && shift(style.top, rect.y - source.y - hit.rect.y)
+      if (left !== null && left !== undefined && top !== null && top !== undefined) {
+        style.left = `${left}px`
+        style.top = `${top}px`
+      } else {
+        const at = await Promise.resolve(bodyPlacementOrigin(source.id))
+        style.left = `${round(rect.x - source.x - at.x - (hit?.geometry.offsetX ?? 0))}px`
+        style.top = `${round(rect.y - source.y - at.y - (hit?.geometry.offsetY ?? 0))}px`
+      }
       const html = serialize(sourceDoc)
       const saved = await conditional(source, api.updateFrame(source.id, { html }, source.updatedAt))
       updateLocal(saved)
+      landed = saved.id
       if (active()) recordUpdates([{ frameId: source.id, before: { html: source.html }, after: { html } }])
       return
     }
+    /* the CSS the element relies on in its source comes along, scoped to
+       it, as it does for a move through the Layers panel */
+    const scope = newScope()
+    let css = carriedCss(source.html, elementPath(original), scope)
     original.remove()
     const sourceHtml = serialize(sourceDoc)
-    el.id = `doop-drawing-${crypto.randomUUID()}`
-    placeDrawing(el, rect, target, hit?.geometry)
+    el.setAttribute(SCOPE_ATTR, scope)
+    placeDrawing(el, rect, target, hit?.geometry, destinationOrigin)
     const destinationDoc = target ? parse(target.html) : parse(drawingDocument({ tool: 'frame', ...rect }))
     if (!target) {
       destinationDoc.body.style.background = ''
       destinationDoc.body.setAttribute('data-doop-canvas-element', 'true')
     }
+    /* an element with an id of its own keeps it (its carried rules name it)
+       unless the destination already uses it; then it, and any descendant
+       id the destination uses, take a fresh name, references included */
+    if (!el.id) el.id = `doop-drawing-${crypto.randomUUID()}`
+    css = renameInCss(css, uniqueIdsIn(destinationDoc, el))
     destinationDoc.body.append(el)
-    const html = serialize(destinationDoc)
+    const html = withCarriedCss(serialize(destinationDoc), css, scope)
     const destination = target
       ? await conditional(target, api.updateFrame(target.id, { html }, target.updatedAt))
       : await api.createFrame(source.canvasId, {
@@ -255,6 +315,7 @@ export function moveDrawing(
     if (active())
       recordDrawingTransfer({ before: target ?? null, after: destination }, { before: source, after: remaining })
     select(destination, target ? el.id : undefined)
+    landed = destination.id
   }
-  return queueDrawingSave(save, 'Couldn’t move the drawing. Please try again.')
+  return queueDrawingSave(save, 'Couldn’t move the drawing. Please try again.').then(() => landed)
 }

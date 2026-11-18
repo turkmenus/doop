@@ -232,6 +232,188 @@
       "when": 1792198605115,
       "tag": "0033_canvas_comments",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792719758584,
+      "tag": "0034_frame_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792742861394,
+      "tag": "0035_approval_automations",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792917173712,
+      "tag": "0036_canvas_guides",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1793060896296,
+      "tag": "0037_local_agent_effort",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1793062237684,
+      "tag": "0038_reasoning_effort",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1793303436354,
+      "tag": "0039_comment_element_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793499824743,
+      "tag": "0040_agent_feedback",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1793521728824,
+      "tag": "0041_custom_fonts",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1793692495440,
+      "tag": "0042_comment_element_origin",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1793693135674,
+      "tag": "0043_frame_stack",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1793762567006,
+      "tag": "0044_design_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1793826097552,
+      "tag": "0045_agent_runner_pick",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1793924448927,
+      "tag": "0046_multiple_model_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1793932055532,
+      "tag": "0047_feedback_runner",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1794104742941,
+      "tag": "0048_frame_rotation",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1794106479747,
+      "tag": "0049_image_descriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1794299332162,
+      "tag": "0050_instance_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1794347436684,
+      "tag": "0051_custom_providers",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1794352711304,
+      "tag": "0052_components",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1794364584915,
+      "tag": "0053_library_components",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1794369628411,
+      "tag": "0054_library_publish_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1794371994196,
+      "tag": "0055_library_nested_sources",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1794387792095,
+      "tag": "0056_work_replies",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1794391031591,
+      "tag": "0057_custom_agents",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1794449184067,
+      "tag": "0058_component_soft_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1794783638191,
+      "tag": "0059_workspace_seats_bought",
+      "breakpoints": true
     }
   ]
 }

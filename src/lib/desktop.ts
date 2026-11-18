@@ -20,6 +20,11 @@ import {
 } from './desktopAuth'
 import { isDesktopShell } from './shell'
 import { codexSetupTarget } from './codexConnection'
+import { forgetPendingConnect, isPendingConnect, parseDesktopConnectLink } from './desktopConnect'
+import { safeRelativeTarget } from './safeTarget'
+import { NO_CANVAS, isViewCommand, runViewCommand, syncViewMenu } from './viewMenu'
+import { initAppMenu } from './appMenu'
+import { type Chord, matchesChord } from './actions/chords'
 
 export type CanvasTab = { id: string; name: string }
 
@@ -96,10 +101,10 @@ export function ensureTab(id: string, name?: string) {
 
 /** Open (or switch to) the tab for a canvas. False in plain browsers so
  *  callers fall back to a bare navigation. */
-export function openCanvasTab(id: string, name?: string, pathPrefix: string = '/c'): boolean {
+export function openCanvasTab(id: string, name?: string): boolean {
   if (!isDesktopShell()) return false
   ensureTab(id, name)
-  navigate(`${pathPrefix}/${id}`)
+  navigate(`/c/${id}`)
   return true
 }
 
@@ -119,9 +124,9 @@ export function closeTab(id: string, currentPath: string) {
   const next = tabs.filter((t) => t.id !== id)
   setTabs(next)
   /* closing the tab you're on lands you on its right neighbour, like Chrome */
-  if (currentPath === `/c/${id}` || currentPath === `/d/${id}`) {
+  if (currentPath === `/c/${id}`) {
     const neighbour = next[Math.min(at, next.length - 1)]
-    navigate(neighbour ? (currentPath.startsWith('/d/') ? `/d/${neighbour.id}` : `/c/${neighbour.id}`) : '/')
+    navigate(neighbour ? `/c/${neighbour.id}` : '/')
   }
 }
 
@@ -132,9 +137,44 @@ export function closeOtherTabs(id: string, currentPath: string) {
   const keep = useTabs.getState().tabs.find((t) => t.id === id)
   if (!keep) return
   setTabs([keep])
-  if (currentPath !== `/c/${id}` && currentPath !== `/d/${id}`) {
-    navigate(currentPath.startsWith('/d/') ? `/d/${id}` : `/c/${id}`)
-  }
+  if (currentPath !== `/c/${id}`) navigate(`/c/${id}`)
+}
+
+/** ⌘1 (Ctrl+1 elsewhere) goes Home and ⌘2…⌘9 to the open tabs in strip
+ *  order, as Figma's desktop app binds them. By physical key, so a layout
+ *  that types another character on the digit row still switches. */
+export const TAB_SHORTCUTS: readonly Chord[] = Array.from({ length: 9 }, (_, i) => ({
+  code: `Digit${i + 1}`,
+  mod: true,
+}))
+
+/** Where a tab shortcut goes: '/' for ⌘1, a tab's canvas for ⌘2 onwards.
+ *  Null when the keys are no tab shortcut or name a tab that isn't open. */
+export function tabShortcutTarget(
+  e: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>,
+  tabs: readonly CanvasTab[],
+  mac?: boolean,
+): string | null {
+  const slot = TAB_SHORTCUTS.findIndex((chord) => matchesChord(e, chord, mac))
+  if (slot < 0) return null
+  if (slot === 0) return '/'
+  const tab = tabs[slot - 1]
+  return tab ? `/c/${tab.id}` : null
+}
+
+/** ⌘, (Ctrl+, elsewhere) opens Settings, as every Mac app and most desktop
+ *  apps on Windows and Linux bind it. By physical key, like the tab chords. */
+export const SETTINGS_SHORTCUT: Chord = { code: 'Comma', mod: true }
+
+/** Where a shell-wide shortcut goes: a tab (tabShortcutTarget) or Settings.
+ *  Null when the keys are neither. */
+export function shellShortcutTarget(
+  e: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>,
+  tabs: readonly CanvasTab[],
+  mac?: boolean,
+): string | null {
+  if (matchesChord(e, SETTINGS_SHORTCUT, mac)) return '/settings'
+  return tabShortcutTarget(e, tabs, mac)
 }
 
 export function closeAllTabs() {
@@ -164,6 +204,12 @@ export function closeActiveTab() {
  *  attempt there. Detected by the API rather than the version so a local
  *  build tests the same code path as a release. */
 export function supportsBrowserSignIn(): boolean {
+  return receivesDesktopLinks()
+}
+
+/** Whether this shell delivers doop:// links to the page (from 0.2.1): the
+ *  way back for anything the system browser finishes on the app's behalf. */
+export function receivesDesktopLinks(): boolean {
   return typeof shellWindow.__TAURI__?.deepLink?.getCurrent === 'function'
 }
 
@@ -212,10 +258,51 @@ async function completeBrowserSignIn(urls: readonly string[]) {
   location.assign(link.to)
 }
 
+/* ---------- integration connect handoff from the system browser ---------- */
+
+/** Providers whose completion request is on its way; cleared only by the
+ *  reload that follows an answer, or by a request that never got one. */
+const connectsInFlight = new Set<string>()
+
+/** The browser relayed a provider's redirect (shared/desktopConnect.ts,
+ *  step 3). Finish it under this app's session and reload onto the outcome,
+ *  so the Integrations page reads the fresh status and shows the notice.
+ *  Links answering no pending connection are ignored. If the request never
+ *  got an answer (offline, server restarting) the pending record stays, so
+ *  "Open doop" in the browser can deliver the link again. */
+async function completeDesktopConnect(urls: readonly string[]) {
+  const link = urls
+    .map(parseDesktopConnectLink)
+    .find((l) => l !== null && isPendingConnect(l.provider) && !connectsInFlight.has(l.provider))
+  if (!link) return
+  /* a second "Open doop" during a slow exchange must not spend the
+     single-use state twice and replace the success with an error */
+  connectsInFlight.add(link.provider)
+  let response: Response
+  try {
+    response = await fetch(`/api/integrations/${link.provider}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: link.query }),
+    })
+  } catch (err) {
+    console.error(err)
+    connectsInFlight.delete(link.provider)
+    return
+  }
+  forgetPendingConnect(link.provider)
+  const answer: unknown = response.ok ? await response.json().catch(() => null) : null
+  const to = safeRelativeTarget((answer as { to?: string } | null)?.to)
+  location.assign(
+    to ?? `/integrations?${link.provider}Error=${encodeURIComponent('Could not finish connecting. Try again.')}`,
+  )
+}
+
 async function handleDesktopLinks(urls: readonly string[]) {
   const setup = urls.map(codexSetupTarget).find((target) => target !== null)
   if (setup) navigate(setup)
   await completeBrowserSignIn(urls)
+  await completeDesktopConnect(urls)
 }
 
 function listenForDesktopLinks() {
@@ -251,7 +338,31 @@ export function initDesktopShell() {
      it as an event — the page never sees the keystroke. Windows has no menu
      bar, so Ctrl+W arrives as a plain keydown. Both close the active tab. */
   shellWindow.__TAURI__?.event?.listen?.('close-tab', closeActiveTab).catch(console.error)
+  /* the macOS menu bar, built from the action registry (appMenu.ts); a shell
+     older than that has only the View menu (view_menu.rs), which a reload
+     leaves showing the last canvas until a canvas reports in again, so it
+     starts out closed */
+  initAppMenu()
+  syncViewMenu(NO_CANVAS)
+  shellWindow.__TAURI__?.event
+    ?.listen?.<unknown>('view-command', (e) => {
+      if (isViewCommand(e.payload)) runViewCommand(e.payload)
+    })
+    .catch(console.error)
   listenForDesktopLinks()
+  /* capture phase, so a field that stops its keys (the zoom input, a colour
+     field) cannot swallow the tab and Settings shortcuts; a frame relays them from inside
+     too, text editing included (frameRuntime.ts) */
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      const target = shellShortcutTarget(e, useTabs.getState().tabs)
+      if (target === null) return
+      e.preventDefault()
+      if (target !== location.pathname) navigate(target)
+    },
+    true,
+  )
   document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() !== 'w' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return
     e.preventDefault()

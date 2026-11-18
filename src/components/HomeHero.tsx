@@ -1,5 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { DRAFT_OPTIONS, DRAFTS_STORAGE_KEY, isDraftCount, readStoredDrafts, type DraftCount } from '../lib/homePrompt'
+import {
+  DRAFT_OPTIONS,
+  DRAFTS_STORAGE_KEY,
+  isDraftCount,
+  parseDraftCount,
+  readStoredDrafts,
+  type DraftCount,
+} from '../lib/homePrompt'
+import { setPromptBoxHidden, usePromptBoxHidden } from '../lib/homePreferences'
 import { DoopMark } from './Logo'
 import { ModelPicker } from './ModelPicker'
 import { BrandMark } from './ui/brand-mark'
@@ -8,27 +16,35 @@ import { Chip } from './ui/chip'
 import { MenuButton } from './ui/menu-button'
 import { Pressable } from './ui/pressable'
 import { Textarea } from './ui/textarea'
+import { Input } from './ui/input'
+import { Button } from './ui/button'
+import { Modal, ModalActions, ModalLede, ModalTitle } from './ui/modal'
 import {
   DropdownMenu,
   DropdownMenuCaption,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
 import {
   ArrowUpIcon,
   AttachmentIcon,
-  CalendarIcon,
+  BlocksIcon,
   ChevronLeftIcon,
+  CheckIcon,
   ChevronRightIcon,
   CirclePlusIcon,
   CopyIcon,
-  HistoryIcon,
   LayoutTemplateIcon,
-  MessageSquareIcon,
+  MinusIcon,
+  PlusIcon,
   UploadIcon,
+  WebIcon,
+  XIcon,
 } from './ui/icons'
+import { useT, type PlainMessageKey } from '../lib/i18n'
 
 /**
  * The home page's front door: the hopping Disc-D, a greeting, a strip of
@@ -46,14 +62,15 @@ export interface HeroActions {
   onConnectAgents: () => void
   onAutomations: () => void
   onIntegrations: () => void
+  onCommunity: () => void
 }
 
 /** a chip either fills the composer with a brief or runs an action */
 interface Chip {
   id: string
-  label: string
+  label: PlainMessageKey
   icon: ReactNode
-  prompt?: string
+  prompt?: PlainMessageKey
   action?: keyof Omit<HeroActions, 'onPrompt'>
 }
 
@@ -62,36 +79,25 @@ const chipIcon = { width: 13, height: 13 } as const
 const CHIPS: Chip[] = [
   {
     id: 'landing',
-    label: 'Draft a landing page',
+    label: 'home.chipLanding',
     icon: <LayoutTemplateIcon {...chipIcon} />,
-    prompt: 'Draft a landing page for ',
-  },
-  {
-    id: 'recap',
-    label: 'Recap a session',
-    icon: <CalendarIcon {...chipIcon} />,
-    prompt: 'Recap what happened on my canvases this week, as one summary frame.',
-  },
-  {
-    id: 'changed',
-    label: 'What changed',
-    icon: <HistoryIcon {...chipIcon} />,
-    prompt: 'What changed across my canvases this week?',
+    prompt: 'home.chipLandingPrompt',
   },
   {
     id: 'automation',
-    label: 'Run an automation',
+    label: 'home.chipAutomation',
     icon: <span className="font-mono text-caption">/</span>,
     action: 'onAutomations',
   },
-  { id: 'agents', label: 'Connect your agents', icon: <CirclePlusIcon {...chipIcon} />, action: 'onConnectAgents' },
-  { id: 'import', label: 'Import a design', icon: <UploadIcon {...chipIcon} />, action: 'onImport' },
+  { id: 'agents', label: 'home.chipAgents', icon: <CirclePlusIcon {...chipIcon} />, action: 'onConnectAgents' },
+  { id: 'import', label: 'home.chipImport', icon: <UploadIcon {...chipIcon} />, action: 'onImport' },
   {
-    id: 'comments',
-    label: 'Review comments',
-    icon: <MessageSquareIcon {...chipIcon} />,
-    prompt: 'Go through the open comments on my canvases and address each one.',
+    id: 'integrations',
+    label: 'home.chipIntegrations',
+    icon: <BlocksIcon {...chipIcon} />,
+    action: 'onIntegrations',
   },
+  { id: 'templates', label: 'home.chipTemplates', icon: <WebIcon {...chipIcon} />, action: 'onCommunity' },
 ]
 
 /** the beam walks the strip while nobody hovers, like a slow carousel */
@@ -123,6 +129,9 @@ export function HomeHero({
   /** a timestamp — the rail's "Ask Doop" and ⌘/ ask for the keyboard */
   focusAt: number
 }) {
+  const hidden = usePromptBoxHidden()
+  const [confirmHide, setConfirmHide] = useState(false)
+  const cancelRef = useRef<HTMLButtonElement>(null)
   const [text, setText] = useState('')
   const [drafts, setDrafts] = useState<DraftCount>(() =>
     readStoredDrafts(typeof localStorage === 'undefined' ? undefined : localStorage),
@@ -130,6 +139,7 @@ export function HomeHero({
   const [beamAt, setBeamAt] = useState(3)
   const [hovered, setHovered] = useState<number | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const t = useT()
 
   useLayoutEffect(() => {
     if (inputRef.current) autosize(inputRef.current)
@@ -140,10 +150,10 @@ export function HomeHero({
   }, [focusAt])
 
   useEffect(() => {
-    if (hovered !== null) return
+    if (hidden || hovered !== null) return
     const timer = window.setInterval(() => setBeamAt((i) => (i + 1) % CHIPS.length), BEAM_STEP_MS)
     return () => window.clearInterval(timer)
-  }, [hovered])
+  }, [hidden, hovered])
 
   function pickDrafts(n: DraftCount) {
     setDrafts(n)
@@ -170,15 +180,52 @@ export function HomeHero({
   function runChip(chip: Chip) {
     if (chip.action) return actions[chip.action]()
     if (chip.prompt) {
-      setText(chip.prompt)
+      setText(t(chip.prompt))
       inputRef.current?.focus()
     }
   }
 
   const beamOn = hovered ?? beamAt
 
+  if (hidden) return null
+
   return (
     <section className="relative overflow-hidden" data-slot="home-hero">
+      <IconButton
+        aria-label={t('home.hidePromptBox')}
+        className="absolute right-4 top-0 z-10 text-ink-faint md:right-8"
+        disabled={busy}
+        onClick={() => setConfirmHide(true)}
+      >
+        <XIcon className="size-4" />
+      </IconButton>
+      {confirmHide && (
+        <Modal
+          size="sm"
+          onClose={() => setConfirmHide(false)}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            cancelRef.current?.focus()
+          }}
+        >
+          <ModalTitle>{t('home.hidePromptBoxTitle')}</ModalTitle>
+          <ModalLede>{t('home.hidePromptBoxLede')}</ModalLede>
+          <ModalActions>
+            <Button ref={cancelRef} onClick={() => setConfirmHide(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setConfirmHide(false)
+                setPromptBoxHidden(true)
+              }}
+            >
+              {t('home.hidePromptBox')}
+            </Button>
+          </ModalActions>
+        </Modal>
+      )}
       {/* the wave: 2 copies of 28 bars, blurred, fading in from the top. It is
           sized to the section, not to pixels, so it ends faded inside the hero
           on a phone as it does on desktop instead of being cut at the edge */}
@@ -195,7 +242,8 @@ export function HomeHero({
           <DoopMark animated size="fill" className="block" />
         </span>
         <h1 className="font-hero text-title font-light leading-none md:text-display">
-          Ask me what to design{firstName ? ', ' : ''}
+          {t('home.greeting')}
+          {firstName ? ', ' : ''}
           {firstName && <span className="text-ink-faint">{firstName}</span>}
         </h1>
       </div>
@@ -228,7 +276,7 @@ export function HomeHero({
                       <i />
                     </span>
                   )}
-                  {chip.label}
+                  {t(chip.label)}
                 </Chip>
               )
             })}
@@ -252,8 +300,8 @@ export function HomeHero({
             rows={1}
             value={text}
             disabled={busy}
-            placeholder="What changed across my canvases this week?"
-            aria-label="Ask Doop what to design"
+            placeholder={t('home.composerPlaceholder')}
+            aria-label={t('home.composerAria')}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
             className="min-h-[52px] text-lead placeholder:text-ink-ghost md:text-lead"
@@ -264,49 +312,18 @@ export function HomeHero({
               focus="ring"
               className="gap-[7px] rounded-row text-ink-soft transition-colors hover:text-ink"
               onClick={actions.onImport}
-              title="Attach a design to start from"
+              title={t('home.attachTitle')}
             >
-              <AttachmentIcon width={14} height={14} /> Files
+              <AttachmentIcon width={14} height={14} /> {t('home.files')}
             </Pressable>
             <span className="flex-1" />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <MenuButton
-                  variant="quiet"
-                  aria-label={`Drafts per prompt: ${drafts}`}
-                  className="whitespace-nowrap"
-                  icon={<CopyIcon width={14} height={14} />}
-                >
-                  {drafts} {drafts === 1 ? 'draft' : 'drafts'}
-                </MenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="end" width="md">
-                <DropdownMenuCaption>Drafts per prompt</DropdownMenuCaption>
-                <DropdownMenuRadioGroup
-                  value={String(drafts)}
-                  onValueChange={(next) => {
-                    const n = Number(next)
-                    if (isDraftCount(n)) pickDrafts(n)
-                  }}
-                >
-                  {DRAFT_OPTIONS.map((n) => (
-                    <DropdownMenuRadioItem
-                      key={n}
-                      value={String(n)}
-                      description={n === 1 ? 'One take on the brief' : `${n} takes, side by side, to pick from`}
-                    >
-                      {n} {n === 1 ? 'draft' : 'drafts'}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <DraftsMenu drafts={drafts} onPick={pickDrafts} />
             <ModelPicker disabled={busy} />
             <IconButton
               variant="primary"
               size="lg"
               shape="round"
-              aria-label="Send"
+              aria-label={t('home.send')}
               disabled={busy || !text.trim()}
               onClick={submit}
             >
@@ -319,7 +336,7 @@ export function HomeHero({
           onClick={actions.onIntegrations}
           className="group mx-[14px] flex w-[calc(100%-28px)] items-center rounded-b-card bg-sub px-5 pb-2.5 pt-3 text-body text-ink-soft transition-colors hover:text-ink"
         >
-          Connect your existing designs for better results
+          {t('home.connectDesigns')}
           <ChevronRightIcon
             width={12}
             height={12}
@@ -342,5 +359,113 @@ export function HomeHero({
         </Pressable>
       </div>
     </section>
+  )
+}
+
+/** The composer's draft count: the usual counts as one-click picks, and a
+ *  stepper under them for any other number. */
+function DraftsMenu({ drafts, onPick }: { drafts: DraftCount; onPick: (n: DraftCount) => void }) {
+  const t = useT()
+  const [open, setOpen] = useState(false)
+  const isPreset = (DRAFT_OPTIONS as readonly number[]).includes(drafts)
+  const [custom, setCustom] = useState(String(drafts))
+
+  function pick(n: DraftCount) {
+    onPick(n)
+    setCustom(String(n))
+  }
+
+  /** the count a step starts from: what is typed when it reads, else the current one */
+  function step(by: 1 | -1) {
+    pick(Math.max(1, (parseDraftCount(custom) ?? drafts) + by))
+  }
+
+  function commitCustom(close: boolean) {
+    const n = parseDraftCount(custom)
+    if (n === null) setCustom(String(drafts))
+    else pick(n)
+    if (close) setOpen(false)
+  }
+
+  return (
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) setCustom(String(drafts))
+      }}
+    >
+      <DropdownMenuTrigger asChild>
+        <MenuButton
+          variant="quiet"
+          aria-label={t('home.draftsAria', { count: drafts })}
+          className="whitespace-nowrap"
+          icon={<CopyIcon width={14} height={14} />}
+        >
+          {t('home.drafts', { count: drafts })}
+        </MenuButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="end" width="md">
+        <DropdownMenuCaption>{t('home.draftsCaption')}</DropdownMenuCaption>
+        <DropdownMenuRadioGroup
+          value={isPreset ? String(drafts) : ''}
+          onValueChange={(next) => {
+            const n = Number(next)
+            if (isDraftCount(n)) pick(n)
+          }}
+        >
+          {DRAFT_OPTIONS.map((n) => (
+            <DropdownMenuRadioItem key={n} value={String(n)} description={t('home.draftsDescription', { count: n })}>
+              {t('home.drafts', { count: n })}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        {/* not a menu item: Radix would take focus and typed digits from the field */}
+        <div className="flex items-center gap-2.5 px-2.5 py-2 text-body">
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate">{t('home.draftsCustom')}</span>
+            <span className="text-caption text-ink-faint">{t('home.draftsCustomDescription')}</span>
+          </span>
+          <div className="flex flex-none items-center rounded-control bg-sub p-0.5 shadow-ring">
+            <IconButton size="sm" aria-label={t('home.draftsFewer')} disabled={drafts <= 1} onClick={() => step(-1)}>
+              <MinusIcon width={12} height={12} />
+            </IconButton>
+            <Input
+              variant="bare"
+              inputSize="auto"
+              inputMode="numeric"
+              aria-label={t('home.draftsCustomAria')}
+              value={custom}
+              onChange={(event) => {
+                /* an edit that is not all digits (a pasted "2.5") is refused whole, never joined into "25" */
+                if (/^\d*$/.test(event.target.value)) setCustom(event.target.value)
+              }}
+              onFocus={(event) => event.target.select()}
+              onBlur={() => commitCustom(false)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') return
+                event.stopPropagation()
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  commitCustom(true)
+                } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                  event.preventDefault()
+                  step(event.key === 'ArrowUp' ? 1 : -1)
+                }
+              }}
+              style={{ width: `${Math.max(2, custom.length) + 1}ch` }}
+              className="text-center font-mono tabular-nums md:text-body"
+            />
+            <IconButton size="sm" aria-label={t('home.draftsMore')} onClick={() => step(1)}>
+              <PlusIcon width={12} height={12} />
+            </IconButton>
+          </div>
+          <span className="flex w-3.5 flex-none text-ink">
+            {!isPreset && <CheckIcon width={14} height={14} aria-hidden />}
+          </span>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

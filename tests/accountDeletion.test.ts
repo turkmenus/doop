@@ -11,12 +11,14 @@ vi.mock('../server/db/persist.ts', () => {
     deleteCanvas: noop,
     deleteFrame: noop,
     deleteGuideline: noop,
+    deleteToken: noop,
     deleteMember: noop,
     deleteReference: noop,
     saveCanvas: noop,
     saveCanvasCopy: noop,
     saveFrame: noop,
     saveGuideline: noop,
+    saveToken: noop,
     saveMember: noop,
     saveReference: noop,
   }
@@ -66,7 +68,9 @@ it('deletes only the canvases nobody else can reach, and leaves the rest', async
   expect(store.getCanvas(theirs.id)?.memberIds ?? []).not.toContain('alice')
   expect(rig.workspaces.get('ws1')?.has('alice')).toBe(false)
   expect(rig.workspaces.get('ws1')?.has('bob')).toBe(true)
-  expect(rig.dbDeletes).toBe(4) // Slack and Linear OAuth handoffs, live activity update tokens, push-to-start tokens
+  // Slack and Linear OAuth handoffs, live activity update tokens, push-to-start tokens,
+  // the person's own custom agents and their changes to the built-in ones
+  expect(rig.dbDeletes).toBe(6)
 })
 
 it('disconnects the Slack and Linear agents, so no installation outlives its installer', async () => {

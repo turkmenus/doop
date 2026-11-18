@@ -1,11 +1,10 @@
 import { env } from './env.ts'
-import { getLocalAgentPreference } from './localAgentPreferences.ts'
+import { readConnections, usableAccount, type Connections } from './agentDefaults.ts'
 import { geminiCloudWorkerFor } from './geminiCloudRuns.ts'
 import { eq, sql } from 'drizzle-orm'
 import { db } from './db/index.ts'
 import { residentUsage } from './db/schema.ts'
 import { oauthAccessToken } from './db/auth-schema.ts'
-import { getStatus } from './modelAccounts.ts'
 import type { AccountKind } from './modelAccounts.ts'
 
 /**
@@ -26,20 +25,7 @@ import type { AccountKind } from './modelAccounts.ts'
  * allowance via RESIDENT_TASK_LIMIT.
  */
 
-export function activeServerProvider(): 'ollama' | 'anthropic' | 'azure' | null {
-  if (env.DOOP_AGENT_PROVIDER === 'ollama' || env.OLLAMA_BASE_URL || env.OLLAMA_MODEL) {
-    return 'ollama'
-  }
-  if (env.ANTHROPIC_API_KEY) return 'anthropic'
-  if (env.AZURE_OPENAI_ENDPOINT && env.AZURE_OPENAI_DEPLOYMENT && env.AZURE_OPENAI_API_KEY) {
-    return 'azure'
-  }
-  return null
-}
-
-const hasServerProvider = Boolean(activeServerProvider())
-
-export const RESIDENT_TASK_LIMIT = env.RESIDENT_TASK_LIMIT > 0 ? env.RESIDENT_TASK_LIMIT : hasServerProvider ? 1000 : 0
+export const RESIDENT_TASK_LIMIT = env.RESIDENT_TASK_LIMIT
 
 export interface Allowance {
   used: number
@@ -50,13 +36,13 @@ export interface Allowance {
   byoModel: boolean
   /** which kind, for the UI copy */
   byoKind?: AccountKind | 'claude-local' | 'gemini-cloud'
-  /** the ChatGPT account's email, so the UI can name what is connected */
+  /** the default account's email, so the UI can name what is connected */
   byoEmail?: string
+  /** a custom provider's name, which no label table knows */
+  byoName?: string
   /** the agent is running on this user's own account right now — connecting
    *  takes effect immediately, it does not wait for the free tasks to run out */
   onOwnAccount: boolean
-  serverProvider?: 'ollama' | 'anthropic' | 'azure' | null
-  serverModel?: string
 }
 
 /** An OAuth access token ever issued to this user = an agent of their own
@@ -81,30 +67,34 @@ async function usedCount(userId: string): Promise<number> {
 
 export async function getAllowance(userId: string): Promise<Allowance> {
   const geminiCloud = !!geminiCloudWorkerFor(userId)
-  const [connected, used, model, local] = await Promise.all([
+  const [connected, used, connections] = await Promise.all([
     hasOwnAgent(userId),
     usedCount(userId),
-    getStatus(userId).catch(() => ({ connected: false }) as Awaited<ReturnType<typeof getStatus>>),
-    getLocalAgentPreference(userId),
+    readConnections(userId).catch((): Connections => ({
+      plan: { enabled: false, model: 'default' },
+      accounts: [],
+      default: undefined,
+    })),
   ])
-  const sProvider = activeServerProvider()
-  const sModel = sProvider === 'ollama' ? env.OLLAMA_MODEL || env.DOOP_AGENT_MODEL || 'hermes3' : undefined
+  /* any connection that is on carries the agent, so the free tier stops
+     counting; the meter names the default, which is what unpicked work runs on */
+  const own = geminiCloud || connections.default !== undefined
+  const defaultAccount = usableAccount(connections, connections.default)
+  const email = defaultAccount?.email
+  const customName = defaultAccount?.custom?.name
   return {
     used,
     limit: RESIDENT_TASK_LIMIT,
     connected,
-    byoModel: geminiCloud || local.enabled || model.connected,
+    byoModel: own,
     ...(geminiCloud
       ? { byoKind: 'gemini-cloud' as const }
-      : local.enabled
-        ? { byoKind: 'claude-local' as const }
-        : model.kind
-          ? { byoKind: model.kind }
-          : {}),
-    ...(!geminiCloud && model.email ? { byoEmail: model.email } : {}),
-    onOwnAccount: geminiCloud || local.enabled || model.connected,
-    serverProvider: sProvider,
-    ...(sModel ? { serverModel: sModel } : {}),
+      : connections.default
+        ? { byoKind: connections.default }
+        : {}),
+    ...(!geminiCloud && email ? { byoEmail: email } : {}),
+    ...(!geminiCloud && customName ? { byoName: customName } : {}),
+    onOwnAccount: own,
   }
 }
 

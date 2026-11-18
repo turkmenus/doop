@@ -12,6 +12,13 @@
 
 import type { ComponentType, SVGProps } from 'react'
 import {
+  Angle,
+  Bold,
+  Italic,
+  Underline,
+  Strikethrough,
+  List,
+  ListOrdered,
   Activity,
   AlignStartVertical,
   AlignCenterVertical,
@@ -21,9 +28,7 @@ import {
   AlignEndHorizontal,
   FlipHorizontal2,
   FlipVertical2,
-  CircleDashed,
   Droplet,
-  Radius,
   AlignCenter,
   AlignJustify,
   AlignLeft,
@@ -34,7 +39,7 @@ import {
   ArrowUp,
   Bell,
   Blocks,
-  Bookmark,
+  Component as LucideComponent,
   Calendar,
   BookOpen,
   Brain,
@@ -47,9 +52,11 @@ import {
   Circle,
   CircleHelp,
   CirclePlus,
-  Command,
+  Clipboard,
+  CodeXml,
   Clock,
-  Compass,
+  Hourglass,
+  Timer,
   Copy,
   CreditCard,
   Download,
@@ -60,6 +67,7 @@ import {
   Folder,
   FolderPlus,
   File,
+  FileText,
   Frame,
   Globe,
   Hand,
@@ -70,8 +78,8 @@ import {
   LayoutTemplate,
   Link2,
   Lock,
+  LockOpen,
   LogOut,
-  MapPin,
   Menu,
   Minus,
   MousePointer2,
@@ -80,11 +88,14 @@ import {
   Monitor,
   Moon,
   PanelLeft,
+  PanelsLeftRight,
+  PictureInPicture2,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
-  PanelRightOpen,
   Paperclip,
+  Pencil,
+  PencilRuler,
   PenTool,
   Play,
   Plus,
@@ -92,7 +103,8 @@ import {
   RadioTower,
   RefreshCw,
   RotateCcw,
-  Scan,
+  Route,
+  Scaling,
   Search,
   Settings,
   Share,
@@ -100,6 +112,8 @@ import {
   SlidersHorizontal,
   AlignHorizontalSpaceAround,
   AlignVerticalSpaceAround,
+  GapHorizontal,
+  GapVertical,
   WrapText,
   SquareDashed,
   Shield,
@@ -109,11 +123,24 @@ import {
   Trash2,
   Type,
   Upload,
-  Unlink2,
+  Unlink,
   User,
   Users,
+  Bot,
   Workflow,
+  Server,
+  Flag,
+  MousePointerClick,
+  SquareMousePointer,
   X,
+  Braces,
+  Blend,
+  Palette,
+  Ruler,
+  Space,
+  ZoomIn,
+  Rocket,
+  Mail,
 } from 'lucide-react'
 
 type SvgProps = Omit<SVGProps<SVGSVGElement>, 'ref'>
@@ -154,15 +181,27 @@ function icon(Base: ComponentType<SvgProps>) {
   }
 }
 
+export const BoldIcon = icon(Bold)
+export const ItalicIcon = icon(Italic)
+export const UnderlineIcon = icon(Underline)
+export const StrikethroughIcon = icon(Strikethrough)
+export const BulletListIcon = icon(List)
+export const OrderedListIcon = icon(ListOrdered)
+
 export const XIcon = icon(X)
 export const ArrowDownIcon = icon(ArrowDown)
 export const HorizontalPaddingIcon = icon(AlignHorizontalSpaceAround)
 export const VerticalPaddingIcon = icon(AlignVerticalSpaceAround)
+/** the space between columns (`column-gap`) */
+export const ColumnGapIcon = icon(GapHorizontal)
+/** the space between rows (`row-gap`) */
+export const RowGapIcon = icon(GapVertical)
 export const WrapTextIcon = icon(WrapText)
 export const SquareDashedIcon = icon(SquareDashed)
 export const MoreHorizontalIcon = icon(Ellipsis)
 export const ShareIcon = icon(Share2)
 export const CopyIcon = icon(Copy)
+export const ClipboardIcon = icon(Clipboard)
 export const TrashIcon = icon(Trash2)
 export const CheckIcon = icon(Check)
 export const ChevronRightIcon = icon(ChevronRight)
@@ -175,15 +214,47 @@ export const AlignCenterHorizontalIcon = icon(AlignCenterHorizontal)
 export const AlignEndHorizontalIcon = icon(AlignEndHorizontal)
 export const FlipHorizontal2Icon = icon(FlipHorizontal2)
 export const FlipVertical2Icon = icon(FlipVertical2)
-export const CircleDashedIcon = icon(CircleDashed)
+export const RotationIcon = icon(Angle)
 export const DropletIcon = icon(Droplet)
-export const RadiusIcon = icon(Radius)
+/** Stroke width as three rules, thin to thick. */
+export function StrokeWidthIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" aria-hidden {...sized(props)}>
+      <path d="M4 6h16" strokeWidth={ICON_STROKE} />
+      <path d="M4 12h16" strokeWidth={ICON_STROKE * 2} />
+      <path d="M4 18h16" strokeWidth={ICON_STROKE * 3} />
+    </svg>
+  )
+}
+export const BracesIcon = icon(Braces)
+export const PaletteIcon = icon(Palette)
+export const BlendIcon = icon(Blend)
+export const RulerIcon = icon(Ruler)
+export const TextSizeIcon = icon(Type)
+export const SpaceIcon = icon(Space)
+/** Corner radius as one rounded corner, a stroke running up and turning right. */
+export function RadiusIcon(props: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={ICON_STROKE}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...sized(props)}
+    >
+      <path d="M5 19v-7a7 7 0 0 1 7-7h7" />
+    </svg>
+  )
+}
 export const AlignLeftIcon = icon(AlignLeft)
 export const AlignCenterIcon = icon(AlignCenter)
 export const AlignRightIcon = icon(AlignRight)
 export const AlignJustifyIcon = icon(AlignJustify)
 export const LinkIcon = icon(Link2)
-export const UnlinkIcon = icon(Unlink2)
+export const UnlinkIcon = icon(Unlink)
 /** Lucide dropped its brand marks; this is its last GitHub outline, kept on
  *  the same grid and stroke as the rest of the set. */
 export function GithubIcon(props: IconProps) {
@@ -209,7 +280,6 @@ export const ImportIcon = icon(Download)
 export const ExportIcon = icon(ExternalLink)
 export const PulseIcon = icon(Activity)
 export const BellIcon = icon(Bell)
-export const ChatIcon = icon(MessageCircle)
 export const SparkIcon = icon(Sparkles)
 export const SearchIcon = icon(Search)
 export const PlusIcon = icon(Plus)
@@ -218,16 +288,19 @@ export const PanelLeftIcon = icon(PanelLeft)
 export const PanelCollapseIcon = icon(PanelLeftClose)
 export const PanelExpandIcon = icon(PanelLeftOpen)
 export const PanelCollapseRightIcon = icon(PanelRightClose)
-export const PanelExpandRightIcon = icon(PanelRightOpen)
+/** the canvas panels' two layouts (Settings → Appearance) */
+export const PanelsFloatingIcon = icon(PictureInPicture2)
+export const PanelsDockedIcon = icon(PanelsLeftRight)
 export const LayersIcon = icon(Layers)
 export const FrameIcon = icon(Frame)
 /** a page of the canvas, in the Layers panel's Pages list */
 export const PageIcon = icon(File)
+/** a PDF document, the Export modal's PDF destination */
+export const PdfIcon = icon(FileText)
 export const BoxIcon = icon(Square)
 export const TextIcon = icon(Type)
 export const ImageIcon = icon(Image)
 export const VectorIcon = icon(PenTool)
-export const BookmarkIcon = icon(Bookmark)
 export const PlayIcon = icon(Play)
 export const ArrowUpIcon = icon(ArrowUp)
 export const ArrowLeftIcon = icon(ArrowLeft)
@@ -237,8 +310,12 @@ export const GridIcon = icon(LayoutGrid)
 export const ListIcon = icon(Menu)
 export const UserIcon = icon(User)
 export const UsersIcon = icon(Users)
-export const CompassIcon = icon(Compass)
+export const BotIcon = icon(Bot)
 export const ClockIcon = icon(Clock)
+/** a prototype interaction's delay */
+export const DelayIcon = icon(Hourglass)
+/** a prototype transition's duration */
+export const DurationIcon = icon(Timer)
 export const GearIcon = icon(Settings)
 export const ShieldIcon = icon(Shield)
 export const HelpIcon = icon(CircleHelp)
@@ -250,6 +327,7 @@ export const BrainIcon = icon(Brain)
 export const BuildingIcon = icon(Building2)
 export const CreditCardIcon = icon(CreditCard)
 export const LockIcon = icon(Lock)
+export const LockOpenIcon = icon(LockOpen)
 export const DesktopIcon = icon(Monitor)
 export const DownloadIcon = icon(Download)
 export const PuzzleIcon = icon(Puzzle)
@@ -261,13 +339,17 @@ export const MoonIcon = icon(Moon)
 export const FolderIcon = icon(Folder)
 export const BookOpenIcon = icon(BookOpen)
 export const SlidersIcon = icon(SlidersHorizontal)
+/** How a prototype screen is scaled to the viewer (the player's scaling menu). */
+export const ScalingIcon = icon(Scaling)
 export const PointerIcon = icon(MousePointer2)
 export const HandIcon = icon(Hand)
+export const ZoomInIcon = icon(ZoomIn)
 /** the select tool's arrow — the same glyph as PointerIcon */
 export const CursorIcon = icon(MousePointer2)
 /** comments: the round bubble, as on the side panel's Comments tab in the design */
 export const CommentIcon = icon(MessageCircle)
-export const PinIcon = icon(MapPin)
+export const CodeIcon = icon(CodeXml)
+export const EditIcon = icon(Pencil)
 export const EyeIcon = icon(Eye)
 export const EyeClosedIcon = icon(EyeOff)
 export const CircleIcon = icon(Circle)
@@ -277,7 +359,6 @@ export const WebIcon = icon(Globe)
 export const RadioTowerIcon = icon(RadioTower)
 export const MinusIcon = icon(Minus)
 /** zoom to fit: the four corners of the viewport */
-export const FitIcon = icon(Scan)
 /** sharing a canvas: the box with the arrow leaving it upward */
 export const ShareUpIcon = icon(Share)
 
@@ -286,8 +367,11 @@ export const ShareUpIcon = icon(Share)
 export const FolderPlusIcon = icon(FolderPlus)
 /** automations: two linked steps */
 export const WorkflowIcon = icon(Workflow)
+export const ServerIcon = icon(Server)
 /** integrations: building blocks */
 export const BlocksIcon = icon(Blocks)
+/* a component's main and its instances, the one glyph that marks them */
+export const ComponentIcon = icon(LucideComponent)
 /** connect an agent: a plus in a ring */
 export const CirclePlusIcon = icon(CirclePlus)
 /** import: the arrow entering from above */
@@ -295,9 +379,18 @@ export const UploadIcon = icon(Upload)
 export const CalendarIcon = icon(Calendar)
 /** what changed: the clock turned back */
 export const HistoryIcon = icon(RotateCcw)
+/* prototypes: the editor's Prototype mode, a flow's start, the player's hotspot hint */
+export const PrototypeIcon = icon(MousePointerClick)
+/** the tool rail's mode switch: drawing and editing, or wiring up the flow */
+export const EditModeIcon = icon(PencilRuler)
+export const PrototypeModeIcon = icon(Route)
+export const FlowStartIcon = icon(Flag)
+export const HotspotIcon = icon(SquareMousePointer)
 /** review comments: the square bubble */
 export const MessageSquareIcon = icon(MessageSquare)
 /** draft a page: a page skeleton */
 export const LayoutTemplateIcon = icon(LayoutTemplate)
-/** the ⌘ key, in shortcut hints */
-export const CommandIcon = icon(Command)
+
+/* the plan and upgrade surfaces */
+export const RocketIcon = icon(Rocket)
+export const MailIcon = icon(Mail)

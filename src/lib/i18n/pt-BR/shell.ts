@@ -1,0 +1,26 @@
+import type { Catalog } from '..'
+
+export const shell: Catalog['shell'] = {
+  account: 'Conta',
+  settings: 'Configurações',
+  admin: 'Admin',
+  helpDocs: 'Ajuda e documentação',
+  desktopApp: 'Baixar o app para desktop',
+  website: 'Site do Doop',
+  appearance: 'Aparência',
+  logOut: 'Sair',
+  updateTitle: 'Atualização disponível',
+  updateBody: 'O Doop {version} está pronto. Reinicie para aplicar a atualização.',
+  updateAgentNote: 'Reiniciar interrompe uma execução de agente em andamento.',
+  updateRestart: 'Reiniciar e atualizar',
+  updateRestarting: 'Reiniciando…',
+  updateLater: 'Agora não',
+  appPromoDismiss: 'Ocultar',
+  appPromoDesktopTitle: 'App do Doop para desktop',
+  appPromoDesktopBody: 'Rode o Claude Code no seu próprio plano, ao lado do canvas.',
+  appPromoDownloadFor: 'Baixar para {platform}',
+  appPromoIosTitle: 'Doop para iPhone e iPad',
+  appPromoIosBody: 'Acompanhe seus agentes enquanto desenham, revise frames e responda comentários em um app nativo.',
+  appPromoIosGet: 'Baixar na App Store',
+  appPromoIosLater: 'Continuar no navegador',
+}

@@ -2,10 +2,12 @@ import * as React from 'react'
 import { authClient } from '../lib/auth'
 import { navigate } from '../App'
 import { posthog } from '../lib/posthog'
-import { useMe } from '../lib/me'
+import { offersUpgrade, useMe } from '../lib/me'
 import { isDesktopShell } from '../lib/shell'
 import { isTheme, useTheme } from '../lib/theme'
+import { useT } from '../lib/i18n'
 import { colorFor } from '../../shared/types'
+import { avatarUrl } from '../../shared/avatar'
 import { themeOptions } from './ThemePicker'
 import { Badge } from './ui/badge'
 import { Avatar } from './ui/avatar'
@@ -23,7 +25,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
-import { GearIcon, HelpIcon, LogOutIcon, ShieldIcon } from './ui/icons'
+import { DesktopIcon, ExportIcon, GearIcon, HelpIcon, LogOutIcon, MailIcon, RocketIcon, ShieldIcon } from './ui/icons'
+import { openUpgrade } from '../lib/upgrade'
+import { PRIORITY_SUPPORT } from '../../shared/billing'
+import { DOWNLOAD_URL, WEBSITE_URL } from '../lib/siteLinks'
 
 /** The account menu the signed-in shell repeats on every page: in the rail
  *  and in the settings header. It lives here so they cannot drift apart. */
@@ -41,69 +46,117 @@ export function AccountMenu({
   const { data: session } = authClient.useSession()
   const me = useMe(session?.user.id)
   const { theme, setTheme } = useTheme()
+  const t = useT()
   const name = session?.user.name ?? ''
+  const image = avatarUrl(session?.user.image)
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         {face ? (
           <IconButton
-            aria-label="Account"
+            aria-label={t('shell.account')}
             title={name}
             shape="round"
             className="size-7 hover:bg-transparent focus-visible:ring-ink-faint data-[state=open]:ring-2 data-[state=open]:ring-ink-faint"
           >
-            <Avatar name={name} color={colorFor(session?.user.id ?? name)} size={28} className="shadow-none" />
+            <Avatar
+              name={name}
+              image={image}
+              color={colorFor(session?.user.id ?? name)}
+              size={28}
+              className="shadow-none"
+            />
           </IconButton>
         ) : (
-          <Pressable aria-label="Account" title={name} layout="inline" focus="ring" className="flex-none rounded-full">
-            <Avatar tone="ink" name={name} size={34} />
+          <Pressable
+            aria-label={t('shell.account')}
+            title={name}
+            layout="inline"
+            focus="ring"
+            className="flex-none rounded-full"
+          >
+            <Avatar tone="ink" name={name} image={image} size={34} />
           </Pressable>
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent side={side} align={align} width="lg">
         <DropdownMenuLabel className="px-2.5 pb-2.5 pt-2">
           <PersonRow
-            avatar={<Avatar name={name} color={colorFor(session?.user.id ?? name)} size={32} className="shadow-none" />}
+            avatar={
+              <Avatar
+                name={name}
+                image={image}
+                color={colorFor(session?.user.id ?? name)}
+                size={32}
+                className="shadow-none"
+              />
+            }
             name={name}
             detail={me?.email ?? session?.user.email}
           />
         </DropdownMenuLabel>
         {/* the plan is a workspace thing; this line says which side of it the
-            account is on — a member of a live paid workspace is on Team */}
+            account is on — a member of a live paid workspace is on Pro */}
         <div className="mx-2.5 mb-2 flex items-center gap-[7px] text-caption text-ink-soft">
           {me?.plan === 'team' ? (
             <>
-              <Badge tone="accent">team</Badge> Team plan
+              <Badge tone="accent">pro</Badge> {t('plans.proPlan')}
             </>
           ) : (
             <>
-              <Badge>free</Badge> Personal plan
+              <Badge>free</Badge> {t('plans.freePlan')}
             </>
           )}
         </div>
+        {offersUpgrade(me) && (
+          <DropdownMenuItem onSelect={() => openUpgrade({ source: 'account-menu' })}>
+            <RocketIcon size="rail" /> {t('plans.upgradeToPro')}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => navigate('/settings')}>
-          <GearIcon size="rail" /> Settings
+          <GearIcon size="rail" /> {t('shell.settings')}
         </DropdownMenuItem>
         {me?.admin && (
           <DropdownMenuItem onSelect={() => navigate('/admin')}>
-            <ShieldIcon size="rail" /> Admin
+            <ShieldIcon size="rail" /> {t('shell.admin')}
+          </DropdownMenuItem>
+        )}
+        {me?.billing && me.plan === 'team' && (
+          <DropdownMenuItem asChild>
+            <a href={PRIORITY_SUPPORT}>
+              <MailIcon size="rail" /> {t('plans.prioritySupport')}
+            </a>
           </DropdownMenuItem>
         )}
         <DropdownMenuItem asChild>
           <a href="/docs" target="_blank" rel="noopener noreferrer">
-            <HelpIcon size="rail" /> Help &amp; docs
+            <HelpIcon size="rail" /> {t('shell.helpDocs')}
+          </a>
+        </DropdownMenuItem>
+        {/* new tabs, which the desktop shell hands to the system browser
+            (initDesktopShell); the desktop app has nothing to download */}
+        {!isDesktopShell() && (
+          <DropdownMenuItem asChild>
+            <a href={DOWNLOAD_URL} target="_blank" rel="noopener noreferrer">
+              <DesktopIcon size="rail" /> {t('shell.desktopApp')}
+            </a>
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem asChild>
+          <a href={WEBSITE_URL} target="_blank" rel="noopener noreferrer">
+            <ExportIcon size="rail" /> {t('shell.website')}
           </a>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {/* the theme is one click from every page; picking one keeps the menu
             open so the change can be seen, and judged, before it closes */}
-        <DropdownMenuCaption>Appearance</DropdownMenuCaption>
+        <DropdownMenuCaption>{t('shell.appearance')}</DropdownMenuCaption>
         <DropdownMenuRadioGroup value={theme} onValueChange={(next) => isTheme(next) && setTheme(next)}>
           {themeOptions.map(({ value, label, Icon }) => (
             <DropdownMenuRadioItem key={value} value={value} onSelect={(e) => e.preventDefault()}>
-              <Icon size="rail" /> {label}
+              <Icon size="rail" /> {t(label)}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
@@ -121,7 +174,7 @@ export function AccountMenu({
             })
           }
         >
-          <LogOutIcon size="rail" /> Log out
+          <LogOutIcon size="rail" /> {t('shell.logOut')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

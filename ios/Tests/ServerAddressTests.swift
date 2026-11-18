@@ -12,8 +12,13 @@ struct ServerAddressChecks {
         try checks.testExportDestinations()
         try checks.testServerResponseContracts()
         checks.testCardScopeBody()
+        checks.testCardAgentAssignmentBody()
+        checks.testPromptContext()
+        try checks.testContextPeople()
+        try checks.testAgentRunners()
         try checks.testAgentActivityStates()
         FrameSnappingChecks.run()
+        try FrameWorkersChecks.run()
         try PendingFrameMoveChecks.run()
         try ProviderSignInChecks.run()
         AppleSignInChecks.run()
@@ -95,6 +100,75 @@ struct ServerAddressChecks {
         let element = CardScope(frameId: "f1", selector: "body > main > h1:nth-of-type(1)").body
         checkEqual(element["selector"] as? String, "body > main > h1:nth-of-type(1)")
         checkTrue(JSONSerialization.isValidJSONObject(["title": "Make it bolder", "scope": element]))
+    }
+
+    func testAgentRunners() throws {
+        let json = #"{"runners":[{"provider":"chatgpt","name":"ChatGPT","model":"model-b","effort":"medium","models":[{"id":"model-a","name":"Model A","blurb":""},{"id":"model-b","name":"Model B","blurb":"Everyday model"}],"efforts":[{"id":"low","name":"Low","blurb":""},{"id":"medium","name":"Medium","blurb":""}]},{"provider":"anthropic-key","name":"Claude","model":"other","models":[{"id":"other","name":"Other","blurb":""}]}],"default":"anthropic-key"}"#
+        let runners = try JSONDecoder().decode(AgentRunners.self, from: Data(json.utf8))
+        checkEqual(runners.runners.map(\.provider), ["chatgpt", "anthropic-key"])
+        // No pick: the Settings default, on its configured model.
+        checkEqual(runners.resolve(nil)?.pick, RunnerPick(provider: "anthropic-key", model: "other"))
+        // A pick on a connected provider keeps its model and a known effort.
+        checkEqual(runners.resolve(RunnerPick(provider: "chatgpt", model: "model-a", effort: "low"))?.pick,
+                   RunnerPick(provider: "chatgpt", model: "model-a", effort: "low"))
+        // An effort the provider does not offer falls back to the connection's own.
+        checkEqual(runners.resolve(RunnerPick(provider: "chatgpt", model: "model-a", effort: "max"))?.pick.effort, "medium")
+        // A pick naming a connection that is gone runs on the default.
+        checkEqual(runners.resolve(RunnerPick(provider: "gemini-key", model: "x"))?.pick.provider, "anthropic-key")
+        checkNil(try JSONDecoder().decode(AgentRunners.self, from: Data(#"{"runners":[]}"#.utf8)).resolve(nil), "Nothing connected: Auto")
+        let body = CardQueueRequest(title: "Go", scope: nil, runner: RunnerPick(provider: "chatgpt", model: "model-a")).body
+        checkEqual((body["runner"] as? [String: Any])?["provider"] as? String, "chatgpt")
+        checkNil(CardQueueRequest(title: "Go", scope: nil).body["runner"], "No pick sends no runner")
+    }
+
+    func testPromptContext() {
+        checkEqual(PromptContextReference.mentionQuery(in: "@"), "")
+        checkEqual(PromptContextReference.mentionQuery(in: "Rewrite @Welcome card"), "Welcome card")
+        checkNil(PromptContextReference.mentionQuery(in: "hello@example.com"), "Email is not a mention query")
+        checkNil(PromptContextReference.mentionQuery(in: "@Page\nMore text"), "A newline ends mention completion")
+        checkEqual(PromptContextReference.removingMentionQuery(from: "Rewrite @Welcome"), "Rewrite ")
+        checkEqual(PromptContextReference.removingMentionQuery(from: "hello@example.com"), "hello@example.com")
+        checkEqual(PromptContextReference.taskTitle("Rewrite", references: []), "Rewrite")
+        let frame = PromptContextReference(kind: .frame, sourceID: "frame-1", name: "Welcome card")
+        let title = PromptContextReference.taskTitle("Rewrite", references: [frame])
+        checkTrue(title.contains("frame: \"Welcome card\" (id: \"frame-1\")"))
+        let request = CardQueueRequest(title: title, scope: CardScope(frameId: "frame-1"), assignment: .specialist(.copy)).body
+        checkEqual(request["title"] as? String, title)
+        checkEqual(request["agents"] as? [String], ["copy"])
+        checkEqual((request["scope"] as? [String: String])?["frameId"], "frame-1")
+    }
+
+    func testContextPeople() throws {
+        let user = try JSONDecoder().decode(DoopUser.self, from: Data(#"{"id":"self","name":"Alex","email":"alex@example.com"}"#.utf8))
+        let presences = try JSONDecoder().decode([CanvasPresence].self, from: Data(#"[{"clientId":"self-tab","userId":"self","name":"Alex","color":"red","kind":"user"},{"clientId":"other-tab","userId":"other","name":"Alex","color":"blue","kind":"user"},{"clientId":"other-tab-2","userId":"other","name":"Alex","color":"blue","kind":"user"},{"clientId":"legacy","name":"Alex","color":"green","kind":"user"},{"clientId":"legacy","name":"Alex","color":"green","kind":"user"},{"clientId":"agent","name":"Alex","color":"orange","kind":"agent"}]"#.utf8))
+        let people = PromptContextReference.people(currentUser: user, presences: presences)
+        checkEqual(people.map(\.sourceID), ["self", "other", "client:legacy"])
+        checkEqual(people.map(\.name), ["Alex", "Alex", "Alex"])
+        checkEqual(PromptContextReference.people(currentUser: nil, presences: presences).count, 3)
+    }
+
+    func testCardAgentAssignmentBody() {
+        let automatic = CardQueueRequest(title: "Make it clearer", scope: nil).body
+        checkEqual(automatic["title"] as? String, "Make it clearer")
+        checkNil(automatic["agents"], "Auto leaves the server's default pipeline unchanged")
+
+        let scopedAutomatic = CardQueueRequest(
+            title: "Make this frame clearer",
+            scope: CardScope(frameId: "frame-1")
+        ).body
+        checkNil(scopedAutomatic["agents"], "Auto keeps the default pipeline for scoped tasks")
+        checkEqual((scopedAutomatic["scope"] as? [String: String])?["frameId"], "frame-1")
+
+        let scoped = CardQueueRequest(
+            title: "Rewrite this heading",
+            scope: CardScope(frameId: "frame-1", selector: "main h1"),
+            assignment: .specialist(.copy)
+        ).body
+        checkEqual(scoped["agents"] as? [String], ["copy"])
+        checkEqual((scoped["scope"] as? [String: String])?["frameId"], "frame-1")
+        checkEqual((scoped["scope"] as? [String: String])?["selector"], "main h1")
+        checkTrue(JSONSerialization.isValidJSONObject(scoped))
+        checkEqual(SpecialistAgent.allCases.map(\.id), ["ux", "copy", "brand", "a11y", "polish"])
     }
 
     func testAgentActivityStates() throws {

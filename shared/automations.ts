@@ -1,16 +1,17 @@
-import { normalizePipeline } from './agents.ts'
+import { AGENT_ROLES, DEFAULT_ROLE_ID, normalizePipeline, roleById, type Roster } from './agents.ts'
+import { isAgentHandle } from './customAgents.ts'
+import type { FrameApproval } from './types.ts'
 
-/**
- * Automations: a schedule plus an ordered list of steps that run on it.
- *
- * Two step types only. A *pull* step asks an integration for designs and
- * lands them on a canvas as frames (Meta ad creatives today). An *agent*
- * step queues a board card for the resident team on a canvas — the same card
- * a person would write on the Board. Every step names its own canvas: an
- * agent only ever works on a canvas, so there is no separate canvas node.
- * Context between steps is implicit — the canvas, and whatever earlier steps
- * put on it.
- */
+/** Scheduled or approval-triggered workflows. Every step names a canvas;
+ * approval workflows use the watched canvas and carry only the signed-off sources.
+ * Design tasks finish before the following step starts. */
+
+/** The `queuedBy` an automation's agent step puts on its board card: how a run tells work an
+ *  automation queued from work a person asked for. */
+export const automationQueuedBy = (name: string): string => `Automation · ${name}`
+
+export const isAutomationCard = (card: { queuedBy?: string }): boolean =>
+  card.queuedBy?.startsWith(automationQueuedBy('')) ?? false
 
 export type ScheduleKind = 'daily' | 'weekdays' | 'weekly'
 
@@ -37,6 +38,25 @@ export interface PullStep {
   canvasId: string
 }
 
+export type AutomationTrigger = { type: 'schedule' } | { type: 'approval'; canvasId: string }
+
+export interface SlackStep {
+  id: string
+  type: 'slack'
+  canvasId: string
+  channelId: string
+  message: string
+}
+
+export interface LinearStep {
+  id: string
+  type: 'linear'
+  canvasId: string
+  teamId: string
+  title: string
+  description: string
+}
+
 export interface AgentStep {
   id: string
   type: 'agent'
@@ -48,7 +68,26 @@ export interface AgentStep {
   canvasId: string
 }
 
-export type Step = PullStep | AgentStep
+export type Step = PullStep | AgentStep | SlackStep | LinearStep
+
+/** A durable run keeps the approved sources and the steps as they were at dispatch. */
+export interface ApprovedSource {
+  id: string
+  canvasId: string
+  name: string
+  approval: FrameApproval
+}
+
+export interface AutomationRunState {
+  steps: Step[]
+  sources: ApprovedSource[]
+  stepIndex: number
+  summaries: string[]
+  links: string[]
+  taskId?: string
+  /** Set before a side effect; an interrupted call is never silently replayed. */
+  dispatching?: boolean
+}
 
 export type RunStatus = 'running' | 'ok' | 'failed'
 
@@ -71,6 +110,7 @@ export interface Automation {
   id: string
   name: string
   enabled: boolean
+  trigger: AutomationTrigger
   schedule: Schedule
   steps: Step[]
   nextRunAt: number | null
@@ -87,6 +127,15 @@ export const MAX_NAME = 80
 export const MAX_PROMPT = 4_000
 
 export const DEFAULT_SCHEDULE: Schedule = { kind: 'weekly', weekday: 1, hour: 9, minute: 0, tz: 'UTC' }
+
+export function normalizeTrigger(raw: unknown): AutomationTrigger | string {
+  if (raw === undefined) return { type: 'schedule' }
+  if (!raw || typeof raw !== 'object') return 'Choose a schedule or approval trigger'
+  const r = raw as Record<string, unknown>
+  if (r.type === 'schedule') return { type: 'schedule' }
+  if (r.type === 'approval' && typeof r.canvasId === 'string') return { type: 'approval', canvasId: r.canvasId.trim() }
+  return 'Choose a schedule or approval trigger'
+}
 
 /* ------------------------------------------------------------------ */
 /* Schedule math                                                       */
@@ -242,6 +291,25 @@ export function normalizeSchedule(raw: unknown): Schedule {
   }
 }
 
+/** how many ids a step keeps for the server to choose from */
+const MAX_ROLE_CANDIDATES = 8
+
+function stepRoles(roles: unknown): string[] {
+  const ids = Array.isArray(roles) ? roles.filter((r): r is string => typeof r === 'string') : []
+  const candidates = ids.filter((id, i) => ids.indexOf(id) === i && (roleById(id, AGENT_ROLES) || isAgentHandle(id)))
+  return candidates.length > 0 ? candidates.slice(0, MAX_ROLE_CANDIDATES) : [DEFAULT_ROLE_ID]
+}
+
+/** One agent per task: the first of a step's candidate ids the step's canvas
+ *  has (built-in or custom) wins, else the default agent. */
+export function narrowStepRoles(steps: Step[], rosterOf: (canvasId: string) => Roster): Step[] {
+  return steps.map((step) =>
+    step.type === 'agent'
+      ? { ...step, roles: normalizePipeline(step.roles, rosterOf(step.canvasId)).slice(0, 1) }
+      : step,
+  )
+}
+
 function stepId(raw: unknown, index: number): string {
   return typeof raw === 'string' && /^[A-Za-z0-9_-]{1,24}$/.test(raw) ? raw : `s${index + 1}`
 }
@@ -255,7 +323,25 @@ export function normalizeSteps(raw: unknown): Step[] | string {
   raw.forEach((item, i) => {
     const s = (item ?? {}) as Record<string, unknown>
     const canvasId = typeof s.canvasId === 'string' ? s.canvasId.trim() : ''
-    if (s.type === 'pull') {
+    const field = (key: string, max = MAX_PROMPT) => (typeof s[key] === 'string' ? s[key].trim().slice(0, max) : '')
+    if (s.type === 'slack') {
+      out.push({
+        id: stepId(s.id, i),
+        type: 'slack',
+        canvasId,
+        channelId: field('channelId', 100),
+        message: field('message'),
+      })
+    } else if (s.type === 'linear') {
+      out.push({
+        id: stepId(s.id, i),
+        type: 'linear',
+        canvasId,
+        teamId: field('teamId', 100),
+        title: field('title', 200),
+        description: field('description'),
+      })
+    } else if (s.type === 'pull') {
       out.push({
         id: stepId(s.id, i),
         type: 'pull',
@@ -270,24 +356,33 @@ export function normalizeSteps(raw: unknown): Step[] | string {
         type: 'agent',
         title: typeof s.title === 'string' ? s.title.trim().slice(0, MAX_NAME) : '',
         prompt: typeof s.prompt === 'string' ? s.prompt.trim().slice(0, MAX_PROMPT) : '',
-        /* one agent per task — the first real role wins */
-        roles: normalizePipeline(s.roles).slice(0, 1),
+        /* the ids that could name an agent, in order: built-in ones, and ones
+           shaped like a custom handle, which only the step's canvas can tell
+           from junk. The server narrows this to the one real agent on save
+           (`narrowStepRoles`) and checks it again when the step runs */
+        roles: stepRoles(s.roles),
         canvasId,
       })
     }
   })
-  if (out.length !== raw.length) return 'each step is a pull or an agent task'
+  if (out.length !== raw.length) return 'each step must be a pull, agent task, Slack message or Linear ticket'
+  if (new Set(out.map((s) => s.id)).size !== out.length) return 'step ids must be unique'
   return out
 }
 
 /** Why a saved automation cannot run yet — shown inline, and the reason the
  *  scheduler skips it. Undefined = ready. */
-export function incompleteReason(steps: Step[]): string | undefined {
+export function incompleteReason(steps: Step[], trigger?: AutomationTrigger): string | undefined {
+  if (trigger?.type === 'approval' && !trigger.canvasId) return 'Pick a canvas to watch for approvals'
   if (steps.length === 0) return 'Add a step'
   for (const s of steps) {
     if (!s.canvasId) return 'Pick a canvas for every step'
     if (s.type === 'pull' && !s.accountId) return 'Pick a Meta ad account'
     if (s.type === 'agent' && !s.prompt) return 'Write what the agent should do'
+    if (s.type === 'slack' && !/^[CG][A-Z0-9]+$/.test(s.channelId)) return 'Enter a Slack channel ID'
+    if (s.type === 'slack' && !s.message) return 'Write a Slack message'
+    if (s.type === 'linear' && !s.teamId) return 'Choose a Linear team'
+    if (s.type === 'linear' && !s.title) return 'Write a Linear ticket title'
   }
   return undefined
 }
@@ -295,19 +390,54 @@ export function incompleteReason(steps: Step[]): string | undefined {
 /* ------------------------------------------------------------------ */
 /* Examples                                                            */
 
-export type ExampleStep = Omit<PullStep, 'id' | 'canvasId'> | Omit<AgentStep, 'id' | 'canvasId'>
+export type ExampleStep =
+  | Omit<PullStep, 'id' | 'canvasId'>
+  | Omit<AgentStep, 'id' | 'canvasId'>
+  | Omit<SlackStep, 'id' | 'canvasId'>
+  | Omit<LinearStep, 'id' | 'canvasId'>
 
 export interface AutomationExample {
   id: string
   name: string
   blurb: string
   schedule: Omit<Schedule, 'tz'>
+  trigger?: 'approval'
   steps: ExampleStep[]
 }
 
 /** The "start from an example" cards. Canvas (and Meta account) are left for
  *  the user to pick; everything else is filled in. */
 export const AUTOMATION_EXAMPLES: AutomationExample[] = [
+  ...[
+    {
+      id: 'approved-sizes',
+      name: 'Make different sizes',
+      blurb: 'Adapt approved designs into square, portrait and landscape drafts.',
+      prompt:
+        'Use draft assets from earlier steps when available, otherwise use the approved sources. For each input, create separate draft frames at 1080×1080, 1080×1920 and 1200×628. Recompose the layout for each size; preserve the brand, message and focal point. Check text fit and keep the original untouched.',
+    },
+    {
+      id: 'approved-localization',
+      name: 'Localize approved designs',
+      blurb: 'Translate approved designs and adapt their layouts.',
+      prompt:
+        'Use draft assets from earlier steps when available, otherwise use the approved sources. For each input, create German, French and Spanish draft versions. Adapt idioms, typography and layout for the language and text length. Preserve brand names and the original intent. Name each new frame with its language; keep the original untouched.',
+    },
+    {
+      id: 'approved-assets',
+      name: 'Create companion assets',
+      blurb: 'Turn an approved direction into a campaign set.',
+      prompt:
+        'Use draft assets from earlier steps when available, otherwise use the approved sources. Create three companion draft assets for each input: a 1200×628 social banner, a 600×300 email header and a 1440×600 website hero. Carry over the visual direction and adapt copy and composition to each use. Keep the original untouched.',
+    },
+  ].map((preset): AutomationExample => ({
+    id: preset.id,
+    name: preset.name,
+    blurb: preset.blurb,
+    trigger: 'approval',
+    schedule: { kind: 'weekly', weekday: 1, hour: 9, minute: 0 },
+    steps: [{ type: 'agent', title: preset.name, prompt: preset.prompt, roles: ['doop'] }],
+  })),
   {
     id: 'weekly-creatives',
     name: 'Weekly ad creatives',

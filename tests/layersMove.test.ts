@@ -44,6 +44,80 @@ describe('moveElement', () => {
     })
     expect(moved?.html).toContain('<p>hello</p><input>')
   })
+
+  it('puts a canvas drop in layout flow while preserving dimensions and transforms', () => {
+    const html = page(
+      '<div><img style="position:absolute;left:40px;top:20px;translate:10px 20px;transform:rotate(15deg);width:80px;height:60px"></div><section></section>',
+    )
+    const result = moveElement(html, 'img', { selector: 'section', place: 'inside' }, { order: '0' })!
+    const doc = new DOMParser().parseFromString(result.html, 'text/html')
+    const image = doc.querySelector('section > img') as HTMLImageElement
+    /* placed by its own inline styles: those go, and the flow places it */
+    expect(image.getAttribute('style')).toBe('transform: rotate(15deg); width: 80px; height: 60px;')
+    expect(image.style.transform).toBe('rotate(15deg)')
+    expect(image.style.width).toBe('80px')
+    expect(image.style.height).toBe('60px')
+    expect(doc.querySelector(result.selector)).toBe(image)
+  })
+
+  it('overrides a stylesheet that places the element, which inline styles cannot remove', () => {
+    const html = page('<style>img{position:absolute;left:40px}</style><div><img></div><section></section>')
+    const result = moveElement(html, 'img', { selector: 'section', place: 'inside' }, { order: '0' })!
+    const image = new DOMParser().parseFromString(result.html, 'text/html').querySelector('section > img')!
+    expect((image as HTMLImageElement).style.position).toBe('relative')
+    expect((image as HTMLImageElement).style.getPropertyPriority('position')).toBe('important')
+  })
+
+  it('places a drop into a box that places its layers by hand absolute, and drops an emptied group', () => {
+    const html = page(
+      '<div data-doop-drawing="group" style="display:flex"><p style="flex-shrink:0;translate:4px 2px">a</p></div><i style="position:absolute"></i>',
+    )
+    const result = moveElement(
+      html,
+      'p',
+      { selector: 'i', place: 'after' },
+      { order: '0', absolute: { left: 12, top: 30 } },
+    )!
+    expect(new DOMParser().parseFromString(result.html, 'text/html').body.innerHTML).toBe(
+      '<i style="position:absolute"></i><p style="position: absolute; left: 12px; top: 30px;">a</p>',
+    )
+  })
+
+  it('reorders an element already in flow with only its drag offset removed', () => {
+    const html = page('<div style="display:flex"><p>a</p><p style="flex-shrink:0;translate:4px 2px">b</p></div>')
+    const result = moveElement(
+      html,
+      'p:nth-of-type(2)',
+      { selector: 'p', place: 'before' },
+      { order: '0', fromFlow: true, flexItem: true },
+    )!
+    expect(result.html).toContain('<div style="display:flex"><p style="flex-shrink: 0;">b</p><p>a</p></div>')
+  })
+
+  it('keeps Layers panel moves from rewriting authored layout styles', () => {
+    const result = moveElement(page('<img style="position:absolute;left:40px"><section></section>'), 'img', {
+      selector: 'section',
+      place: 'inside',
+    })
+    expect(result?.html).toContain('<section><img style="position:absolute;left:40px"></section>')
+  })
+
+  it('refuses locked destinations, cycles, and invalid HTML on canvas drops', () => {
+    const locked = page('<div data-doop-locked><section><p>Child</p></section></div><img>')
+    expect(moveElement(locked, 'img', { selector: 'section', place: 'inside' }, { order: '0' })).toBeNull()
+    expect(moveElement(locked, 'img', { selector: 'p', place: 'before' }, { order: '0' })).toBeNull()
+    expect(
+      moveElement(
+        page('<div><section></section></div>'),
+        'div',
+        { selector: 'section', place: 'inside' },
+        { order: '0' },
+      ),
+    ).toBeNull()
+    expect(
+      moveElement(page('<p>Text</p><div>Box</div>'), 'div', { selector: 'p', place: 'inside' }, { order: '0' }),
+    ).toBeNull()
+  })
 })
 
 describe('holdsChildren', () => {
