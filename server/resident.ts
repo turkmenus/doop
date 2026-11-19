@@ -19,6 +19,7 @@ import {
   type TokenResult,
 } from '../shared/designTokens.ts'
 import { ModelAuthError, ModelConfigurationError, ModelUnavailableError, pickModel } from './agentModel.ts'
+import { isCustomProviderKind } from '../shared/customProvider.ts'
 import { RESIDENT_TASK_LIMIT } from './allowance.ts'
 import * as actions from './actions.ts'
 import { captureFeature, captureTokenResults } from './featureEvents.ts'
@@ -860,7 +861,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
           const res = await retryModelTurn(
             () =>
               model.run({
-                maxTokens: 16000,
+                maxTokens: isCustomProviderKind(model.provider) || model.provider === 'ollama' ? 32000 : 16000,
                 system: [
                   { text: systemFor(role, roster), cache: true },
                   ...guidelinesBlock,
@@ -895,7 +896,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
             break
           }
 
-          messages.push({ role: 'assistant', content: res.content })
+          if (res.content.length > 0) messages.push({ role: 'assistant', content: res.content })
           turnsUsed = turn + 1
           const toolBlocks = res.content.filter(
             (block): block is Anthropic.ToolUseBlockParam => block.type === 'tool_use',
@@ -960,7 +961,7 @@ async function runAgent(canvasId: string, agentName: string, stalled: Set<string
             messages.push({
               role: 'user',
               content:
-                'Your response reached the output limit before producing an executable edit. Continue with bounded tool calls: begin_frame_rewrite, append_frame_rewrite with each chunk under 12,000 characters, then commit_frame_rewrite and screenshot_frame.',
+                'Your response reached the output limit before producing an executable edit. Continue with smaller, bounded tool calls: create one frame at a time with create_frame, or for a large rewrite use begin_frame_rewrite, append_frame_rewrite with each chunk under 12,000 characters, then commit_frame_rewrite and screenshot_frame.',
             })
             continue
           }

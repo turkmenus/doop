@@ -10,6 +10,7 @@ import {
   runChatCompletionsTurn,
 } from '../server/chatCompletionsAgent.ts'
 import { IMAGE_NOTE, ModelAuthError, ModelUnavailableError } from '../server/openaiAgent.ts'
+import { ModelStreamInterruptedError } from '../server/modelTurnRetry.ts'
 
 /**
  * The Chat Completions transport speaks the same Anthropic message shape the
@@ -339,9 +340,21 @@ describe('reasoning_content', () => {
     expect(second.messages[2]).toMatchObject({ role: 'assistant', reasoning_content: 'A hero needs a headline first.' })
   })
 
-  it('still fails a response that only thought', () => {
+  it('still fails a response that only thought, as a retryable interruption', () => {
     expect(() => fromCompletion({ choices: [{ message: { reasoning_content: 'hmm' } }] }, 'Kimi')).toThrow(
-      /empty response/,
+      ModelStreamInterruptedError,
     )
+  })
+
+  it('reads Ollama reasoning and reports length exhaustion while thinking as max_tokens', () => {
+    const truncated = fromCompletion(
+      { choices: [{ finish_reason: 'length', message: { content: '', reasoning: 'planning all cards…' } }] },
+      'Ollama',
+    )
+    expect(truncated.stop_reason).toBe('max_tokens')
+    expect(truncated.content).toEqual([{ type: 'thinking', thinking: 'planning all cards…', signature: '' }])
+
+    const out = toMessages('sys', [{ role: 'assistant', content: truncated.content }], true)
+    expect(out[1]).toEqual({ role: 'assistant', content: '' })
   })
 })

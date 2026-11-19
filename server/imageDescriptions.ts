@@ -145,7 +145,8 @@ export async function describeImage(
             ],
           },
         ],
-        maxTokens: 400,
+        /* thinking models spend reasoning tokens out of maxTokens before writing the description */
+        maxTokens: 2048,
         signal,
       }),
     signal,

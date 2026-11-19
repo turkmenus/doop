@@ -10,6 +10,7 @@ import {
   isModelUnavailable,
   responseError,
 } from './openaiAgent.ts'
+import { ModelStreamInterruptedError } from './modelTurnRetry.ts'
 import type { StopReason, TurnBlock, TurnRequest, TurnResult } from './openaiAgent.ts'
 import type { CustomTokenParam } from '../shared/customProvider.ts'
 
@@ -183,7 +184,7 @@ function toMessages(
       }
       out.push({
         role: 'assistant',
-        content: texts.length > 0 ? texts.join('\n') : null,
+        content: texts.length > 0 ? texts.join('\n') : calls.length > 0 ? null : '',
         ...(calls.length > 0 ? { tool_calls: calls } : {}),
         ...(echoReasoning && thoughts.length > 0 ? { reasoning_content: thoughts.join('\n') } : {}),
       })
@@ -258,10 +259,13 @@ interface CompletionBody {
     message?: {
       content?: string | null
       reasoning_content?: string | null
+      /* Ollama puts thinking traces under `reasoning` rather than `reasoning_content` */
+      reasoning?: string | null
       refusal?: string | null
       tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[]
     }
   }[]
+  usage?: unknown
 }
 
 function fromCompletion(body: CompletionBody, label: string): TurnResult {
@@ -271,12 +275,13 @@ function fromCompletion(body: CompletionBody, label: string): TurnResult {
       : new Error(`${label}: ${body.error.message}`)
   }
   const choice = body.choices?.[0]
-  if (!choice?.message) throw new Error(`${label} returned an empty response`)
+  if (!choice?.message) throw new ModelStreamInterruptedError(`${label} returned an empty response`)
   const content: TurnBlock[] = []
   /* kept for the next request, never shown: the signature is Anthropic's and
      this block never reaches the Messages API */
-  if (choice.message.reasoning_content) {
-    content.push({ type: 'thinking', thinking: choice.message.reasoning_content, signature: '' })
+  const reasoning = choice.message.reasoning_content ?? choice.message.reasoning
+  if (reasoning) {
+    content.push({ type: 'thinking', thinking: reasoning, signature: '' })
   }
   if (choice.message.content) content.push({ type: 'text', text: choice.message.content })
   const refused = Boolean(choice.message.refusal)
@@ -312,10 +317,13 @@ function fromCompletion(body: CompletionBody, label: string): TurnResult {
   }
   const truncated = choice.finish_reason === 'length'
   const stop: StopReason = refused ? 'refusal' : toolCalls > 0 ? 'tool_use' : truncated ? 'max_tokens' : 'end_turn'
-  /* a response with nothing in it would end the loop silently; make it a
-     visible failure instead */
-  if (!content.some((block) => block.type !== 'thinking') && !refused)
-    throw new Error(`${label} returned an empty response`)
+  /* When thinking exhausted max_tokens before any text or tool call could be
+     emitted, return stop_reason='max_tokens' so callers can nudge the model to
+     break its work into smaller steps instead of crashing the run. */
+  if (!content.some((block) => block.type !== 'thinking') && !refused) {
+    if (truncated) return { content, stop_reason: 'max_tokens' }
+    throw new ModelStreamInterruptedError(`${label} returned an empty response`)
+  }
   return { content, stop_reason: stop }
 }
 
@@ -338,7 +346,23 @@ export async function runChatCompletionsTurn(config: ChatCompletionsConfig, req:
     ...(req.signal ? { signal: req.signal } : {}),
   })
   if (!res.ok) throw await responseError(res, config.label)
-  return fromCompletion((await res.json()) as CompletionBody, config.label)
+  const body = (await res.json()) as CompletionBody
+  try {
+    return fromCompletion(body, config.label)
+  } catch (error) {
+    if (error instanceof ModelStreamInterruptedError) {
+      const choice = body.choices?.[0]
+      console.warn('[chat-completions] empty response', {
+        label: config.label,
+        model: config.model,
+        hasChoices: Boolean(body.choices?.length),
+        finishReason: choice?.finish_reason,
+        hasReasoning: Boolean(choice?.message?.reasoning_content ?? choice?.message?.reasoning),
+        usage: body.usage,
+      })
+    }
+    throw error
+  }
 }
 
 /* exported for tests */
